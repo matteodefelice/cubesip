@@ -16,7 +16,7 @@ For one geohash cell the script:
 Run from the repository root, with an Earth Data Hub token in cubesip.yaml:
 
     uv run --group examples python examples/precip_p90_yearly.py
-    uv run --group examples python examples/precip_p90_yearly.py --lat 45.30 --lon 9.50
+    uv run --group examples python examples/precip_p90_yearly.py --latlon 45.30 9.50
     uv run --group examples python examples/precip_p90_yearly.py --years 1995 2024 --percentile 95
 """
 
@@ -25,16 +25,16 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import matplotlib
-import numpy as np
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import pandas as pd
 import xarray as xr
 
 import cubesip
 from cubesip.spatial import find_dims
 
-# Default site: same cropland cell as examples/ndvi_yearly.py. Pass --lat/--lon or --geohash.
-DEFAULT_LAT, DEFAULT_LON = 48.30, 1.65
+# Default site (lat, lon): same cropland cell as examples/ndvi_yearly.py.
+DEFAULT_SITE = (48.30, 1.65)
 DATASET = "era5/era5-single-levels-atmosphere-v0"
 
 # Chart colours (light theme): one accent for the yearly percentile, muted grey for context.
@@ -51,10 +51,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     where = parser.add_mutually_exclusive_group()
     where.add_argument("--geohash", help="geohash of the site, e.g. u094v8")
-    where.add_argument("--lat", type=float, help="latitude of the site (use with --lon)")
-    parser.add_argument("--lon", type=float, help="longitude of the site")
+    where.add_argument(
+        "--latlon",
+        type=float,
+        nargs=2,
+        default=DEFAULT_SITE,
+        metavar=("LAT", "LON"),
+        help="site coordinates (default: cropland in the Beauce plain, France)",
+    )
     parser.add_argument(
-        "--precision", type=int, default=6, help="geohash length for --lat/--lon (6 = ~1 km)"
+        "--precision", type=int, default=6, help="geohash length for --latlon (6 = ~1 km)"
     )
     parser.add_argument(
         "--years", type=int, nargs=2, default=[2015, 2024], metavar=("FIRST", "LAST")
@@ -71,20 +77,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", help="cubesip config file (default: ./cubesip.yaml)")
     parser.add_argument("--show", action="store_true", help="also open the chart in a window")
     args = parser.parse_args()
-    if args.lat is not None and args.lon is None:
-        parser.error("--lat needs --lon")
     if not 0 < args.percentile < 100:
         parser.error("--percentile must be between 0 and 100")
-    if args.geohash is None:
-        lat = DEFAULT_LAT if args.lat is None else args.lat
-        lon = DEFAULT_LON if args.lon is None else args.lon
-        args.geohash = cubesip.geohash.encode(lat, lon, args.precision)
+    args.geohash = args.geohash or cubesip.geohash.encode(*args.latlon, args.precision)
     return args
 
 
-def fetch_year(year: int, args: argparse.Namespace) -> xr.Dataset:
+def fetch_year(year: int, args: argparse.Namespace, config: cubesip.Config) -> xr.Dataset:
     """ERA5 hourly ``tp`` for one calendar year (downloaded or read from the cache)."""
-    request = cubesip.Request.from_json(
+    print(f"{year}: ", end="", flush=True)
+    result = cubesip.run(
         {
             "driver": "edh",
             "dataset": DATASET,
@@ -92,15 +94,10 @@ def fetch_year(year: int, args: argparse.Namespace) -> xr.Dataset:
             "geohash": args.geohash,
             "time": {"start": f"{year}-01-01", "end": f"{year}-12-31"},
             "target_dir": args.target_dir,
-        }
+        },
+        config,
     )
-    report = cubesip.check(request, args.config)
-    if not report.ok:
-        raise SystemExit(report.summary())
-    if report.cache_hit is None:
-        print(f"{year}: downloading ({report.size.detail}) ...", flush=True)
-    result = cubesip.run(request, args.config)
-    print(f"{year}: {'from cache' if result.from_cache else 'saved'} {result.path.name}")
+    print(f"{'from cache' if result.from_cache else 'downloaded'} {result.path.name}")
     return result.dataset
 
 
@@ -108,24 +105,23 @@ def hourly_mm(ds: xr.Dataset) -> pd.Series:
     """Hourly precipitation (mm), averaged over the ERA5 cells touching the geohash."""
     dims = find_dims(ds)
     tp = ds["tp"].mean(dim=(dims.y, dims.x))
-    series = tp.to_series().astype("float64") * 1000.0  # m -> mm
-    series.index = pd.DatetimeIndex(series.index)
-    return series
+    return tp.to_series().astype("float64") * 1000.0  # m -> mm
 
 
 def daily_mm(hourly: pd.Series) -> pd.Series:
-    """Daily totals (mm). Each value belongs to the hour *ending* at its timestamp."""
-    shifted = hourly.copy()
-    shifted.index = shifted.index - np.timedelta64(1, "h")
-    days = shifted.resample("D")
+    """Daily totals (mm).
+
+    A value at time t is the rain of the hour ending at t, so day d collects the hours in
+    (d 00:00, d+1 00:00]: bins closed on the right and labelled by their start.
+    """
+    days = hourly.resample("D", closed="right", label="left")
     totals, hours = days.sum(), days.count()
     daily = totals[hours == 24]  # drop incomplete days at the edges of the period
     daily.index.name = "date"
     return daily
 
 
-def yearly_table(daily: pd.Series, percentile: float, threshold: float) -> pd.DataFrame:
-    wet = daily[daily >= threshold] if threshold > 0 else daily
+def yearly_table(daily: pd.Series, wet: pd.Series, percentile: float) -> pd.DataFrame:
     wet_by_year = wet.groupby(wet.index.year)
     by_year = daily.groupby(daily.index.year)
     table = pd.DataFrame(
@@ -143,14 +139,12 @@ def yearly_table(daily: pd.Series, percentile: float, threshold: float) -> pd.Da
 
 def plot(
     wet: pd.Series,
-    table: pd.DataFrame,
-    column: str,
-    args: argparse.Namespace,
+    yearly: pd.Series,
+    percentile: float,
+    geohash: str,
+    days_label: str,
     path: Path,
 ) -> None:
-    import matplotlib.dates as mdates
-    import matplotlib.pyplot as plt
-
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
@@ -162,7 +156,7 @@ def plot(
     fig.patch.set_facecolor(SURFACE)
     ax.set_facecolor(SURFACE)
 
-    day_label = "Wet day" if args.wet_day_threshold > 0 else "Day"
+    # Context: every day that counts, small and muted.
     ax.scatter(
         wet.index,
         wet.values,
@@ -170,14 +164,15 @@ def plot(
         color=INK_MUTED,
         alpha=0.35,
         linewidths=0,
-        label=f"{day_label} (daily total)",
+        label="Daily total",
         zorder=2,
     )
 
-    mid_year = pd.to_datetime([f"{year}-07-01" for year in table.index])
+    # The story: one point per year, placed mid-year, joined by a 2px line.
+    mid_year = pd.to_datetime([f"{year}-07-01" for year in yearly.index])
     ax.plot(
         mid_year,
-        table[column],
+        yearly.values,
         color=ACCENT,
         linewidth=2,
         solid_joinstyle="round",
@@ -187,14 +182,14 @@ def plot(
         markerfacecolor=ACCENT,
         markeredgecolor=SURFACE,  # surface ring keeps markers legible over the dots
         markeredgewidth=2,
-        label=f"Yearly {args.percentile:g}th percentile",
+        label=f"Yearly {percentile:g}th percentile",
         zorder=3,
     )
 
-    last_year, last_value = table.index[-1], table[column].iloc[-1]
+    # Label only the latest year, in text ink beside its marker.
     ax.annotate(
-        f"{last_year}: {last_value:.1f} mm",
-        xy=(mid_year[-1], last_value),
+        f"{yearly.index[-1]}: {yearly.iloc[-1]:.1f} mm",
+        xy=(mid_year[-1], yearly.iloc[-1]),
         xytext=(10, 0),
         textcoords="offset points",
         va="center",
@@ -211,28 +206,25 @@ def plot(
         ax.spines[side].set_visible(False)
     ax.spines["bottom"].set_color(AXIS)
     ax.tick_params(colors=INK_MUTED, length=0, pad=6)
-    ax.xaxis.set_major_locator(mdates.YearLocator(base=max(1, len(table) // 10)))
+    ax.xaxis.set_major_locator(mdates.YearLocator(base=max(1, len(yearly) // 10)))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-    first, last = table.index[0], table.index[-1]
+    first, last = yearly.index[0], yearly.index[-1]
     ax.set_xlim(pd.Timestamp(f"{first}-01-01"), pd.Timestamp(f"{last}-12-31"))
 
-    fig.subplots_adjust(left=0.08, right=0.9, top=0.84, bottom=0.08)  # room for end label
+    fig.subplots_adjust(top=0.84)  # room for the title block
     fig.text(
         0.02,
         0.96,
-        f"{args.percentile:g}th percentile of daily precipitation per year, geohash {args.geohash}",
+        f"{percentile:g}th percentile of daily precipitation per year, geohash {geohash}",
         va="top",
         color=INK_PRIMARY,
         fontsize=13,
         fontweight="semibold",
     )
-    days = (
-        f"wet days (>= {args.wet_day_threshold:g} mm)" if args.wet_day_threshold > 0 else "all days"
-    )
     fig.text(
         0.02,
         0.905,
-        f"ERA5 total precipitation (Earth Data Hub), {days}; "
+        f"ERA5 total precipitation (Earth Data Hub), {days_label}; "
         "mean of the 0.25° cells touching the geohash",
         va="top",
         color=INK_SECONDARY,
@@ -242,13 +234,13 @@ def plot(
     for text in legend.get_texts():
         text.set_color(INK_SECONDARY)
 
-    fig.savefig(path, facecolor=SURFACE)
+    # "tight" grows the image to fit every label, e.g. the end label past the axes.
+    fig.savefig(path, facecolor=SURFACE, bbox_inches="tight", pad_inches=0.2)
 
 
 def main() -> None:
     args = parse_args()
-    if not args.show:
-        matplotlib.use("Agg")
+    config = cubesip.load_config(args.config)
     first, last = args.years
     box = cubesip.geohash.bbox(args.geohash)
     print(
@@ -257,11 +249,15 @@ def main() -> None:
     )
 
     hourly = pd.concat(
-        [hourly_mm(fetch_year(year, args)) for year in range(first, last + 1)]
+        [hourly_mm(fetch_year(year, args, config)) for year in range(first, last + 1)]
     ).sort_index()
     daily = daily_mm(hourly)
-    table = yearly_table(daily, args.percentile, args.wet_day_threshold)
-    column = table.columns[0]
+    threshold = args.wet_day_threshold
+    if threshold > 0:
+        wet, days_label = daily[daily >= threshold], f"wet days (>= {threshold:g} mm)"
+    else:
+        wet, days_label = daily, "all days"
+    table = yearly_table(daily, wet, args.percentile)
     print()
     print(table.to_string())
 
@@ -271,13 +267,10 @@ def main() -> None:
     csv_path = out / f"{stem}.csv"
     png_path = out / f"{stem}.png"
     table.to_csv(csv_path)
-    wet = daily[daily >= args.wet_day_threshold] if args.wet_day_threshold > 0 else daily
-    plot(wet, table, column, args, png_path)
+    yearly = table[f"p{args.percentile:g}_mm"]
+    plot(wet, yearly, args.percentile, args.geohash, days_label, png_path)
     print(f"\nTable: {csv_path}\nChart: {png_path}")
-
     if args.show:
-        import matplotlib.pyplot as plt
-
         plt.show()
 
 

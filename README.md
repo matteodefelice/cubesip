@@ -52,7 +52,7 @@ is wrong.
 Two scripts in [examples/](examples/) compute a yearly metric for one site. Both make one
 cubesip request per year, write a PNG chart and a CSV table to `data/`, and read the cached
 files instead of downloading when run again. Both default to the same cropland cell in the
-Beauce plain (France); pass `--lat/--lon` or `--geohash` for your own site.
+Beauce plain (France); pass `--latlon LAT LON` or `--geohash` for your own site.
 
 [examples/ndvi_yearly.py](examples/ndvi_yearly.py): yearly mean NDVI from Sentinel-2 (openEO).
 Clouds, shadows and snow are masked with the scene classification band; the yearly value is
@@ -60,7 +60,7 @@ the mean of monthly means, so summer's many clear scenes don't outweigh the wint
 
 ```bash
 uv run --group examples python examples/ndvi_yearly.py
-uv run --group examples python examples/ndvi_yearly.py --lat 45.30 --lon 9.50 --years 2020 2024
+uv run --group examples python examples/ndvi_yearly.py --latlon 45.30 9.50 --years 2020 2024
 ```
 
 [examples/precip_p90_yearly.py](examples/precip_p90_yearly.py): yearly 90th percentile of
