@@ -4,10 +4,19 @@ Companion to [plan.MD](plan.MD) (the goals). This file records the design decisi
 milestones to build it.
 
 **Status (2026-11-18):** M1-M5 implemented and covered by the offline test suite (85 tests).
-Earth Data Hub is tested against a local HTTP server that enforces `edh:<token>` basic auth;
-openEO `check()` was run live against CDSE and Planetary Computer metadata (no login).
-Not yet verified with real credentials: EDH downloads, openEO downloads (`uv run pytest -m live`).
-M6 (docs) partly done in README.
+Earth Data Hub is tested against a local HTTP server that enforces `edh:<token>` basic auth.
+
+Live runs on CDSE (`uv run pytest -m live`), login via stored refresh token:
+- SENTINEL2_L2A, `u0nd9w`, 2 weeks, B04/B08: downloaded in ~10 s, float32, native
+  EPSG:32632, all pixels valid; child geohash `u0nd9w1` served from cache.
+- Planetary Computer `landsat-c2-l2` via `load_stac`, `u0nd9w`, 2 months, red/nir08:
+  downloaded in ~15 s, all pixels valid. Estimate 10 dates / 29x21 px vs actual 10 / 30x21.
+
+- Earth Data Hub ERA5 `era5-single-levels-atmosphere-v0`, `u0nd9` (~4 km), 2 days, t2m:
+  downloaded in ~10 s, 48 hourly steps (end day inclusive), the single 0.25° cell that
+  intersects the cell, plausible values; the token is in neither the NetCDF nor the manifest.
+
+All drivers are now verified end to end. M6 (docs) partly done in README.
 
 ## 1. Decisions
 
@@ -147,7 +156,7 @@ Each milestone ends with green `uv run pytest` and `uv run ruff check .`.
 - End-to-end test fully offline: synthetic Zarr -> `run` -> NetCDF + manifest -> second `run`
   served from cache.
 
-**M4 Earth Data Hub driver** (done; live download not yet run)
+**M4 Earth Data Hub driver** (done; verified live)
 - Open `{url}/{dataset}.zarr` with `engine="zarr", chunks={}`, token as an `Authorization`
   header via `storage_options` (verified with zarr 3 + fsspec against a local auth server,
   zarr v2 and v3 stores).
@@ -156,7 +165,7 @@ Each milestone ends with green `uv run pytest` and `uv run ruff check .`.
 - Docs: https://earthdatahub.destine.eu/getting-started and the ERA5 dataset page
   (dims `valid_time`, `latitude`, `longitude`; hourly; 0.25°).
 
-**M5 openEO driver** (done; `check()` verified live without login, downloads not yet run)
+**M5 openEO driver** (done; verified live for collections and `load_stac`)
 - `connect()`: `openeo.connect(url)` + auth method from YAML; login only when fetching.
 - Collections: `describe_collection(id)` for existence, band names (`cube:dimensions` /
   `summaries.eo:bands`), resolution and native CRS.
@@ -178,13 +187,15 @@ Each milestone ends with green `uv run pytest` and `uv run ruff check .`.
 
 ## 5. Risks and things to verify during implementation
 
-1. **Planetary Computer through CDSE `load_stac`**: PC assets need signed URLs (SAS tokens).
-   Still to verify with a logged-in download; also whether `load_stac` band names are the
-   asset keys (`red`, `nir08`) as cubesip assumes.
+1. ~~**Planetary Computer through CDSE `load_stac`**~~ Verified: the back-end reads PC's signed
+   assets, and `load_stac` band names are the STAC asset keys (`red`, `nir08`).
 2. **openEO synchronous limits**: large requests time out. Batch jobs are out of scope, so the
    checker's size warning is the safeguard; tune `max_sync_bytes` after the first live runs.
-3. **openEO NetCDF CRS metadata**: confirm CDSE output carries a grid mapping that
-   `spatial.native_crs` can read (needed for cache reuse).
+3. ~~**openEO NetCDF CRS metadata**~~ Verified: CDSE output has a `crs` grid-mapping variable
+   that `spatial.native_crs` reads (EPSG:32632), and cache reuse works on it.
+7. **Scaled band values**: data arrive as stored integers (e.g. Landsat C2 L2
+   `DN * 2.75e-5 - 0.2`). Documented in the README; applying `raster:bands` scale/offset
+   automatically is a possible follow-up.
 4. **Manifest on a synced folder**: the repo lives under OneDrive. A lock file protects
    concurrent writes on one machine/network share, but OneDrive sync between machines can still
    create conflict copies. Keep the shared manifest on a network share or a non-synced folder.

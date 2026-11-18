@@ -41,6 +41,12 @@ ndvi = (ds["B08"] - ds["B04"]) / (ds["B08"] + ds["B04"])
 or a `cubesip.Config` as the second argument to use another one. `run(req, force=True)`
 ignores the cache.
 
+Band values are returned as the provider stores them; cubesip does not apply scale factors.
+Convert to physical units before computing indices, using the `scale`/`offset` listed in the
+collection's STAC `raster:bands` metadata. For example, Landsat Collection 2 Level-2 surface
+reflectance is `DN * 2.75e-5 - 0.2`; with a non-zero offset, an NDVI computed on raw values
+is wrong.
+
 ### Requests
 
 Request documents follow [schemas/request.schema.json](schemas/request.schema.json); see

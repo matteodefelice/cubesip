@@ -66,3 +66,23 @@ def test_openeo_sentinel2(config, tmp_path: Path) -> None:
     assert result.manifest_rows[0]["crs"].startswith("EPSG:326")  # native UTM kept
     child = {**request, "geohash": "u0nd9w1", "variables": ["B08"]}
     assert cubesip.run(child, cfg).from_cache
+
+
+def test_openeo_load_stac_planetary_computer(config, tmp_path: Path) -> None:
+    """Planetary Computer assets are signed; the CDSE back-end must still read them."""
+    cfg = _isolated(config, tmp_path)
+    request = {
+        "driver": "openeo",
+        "dataset": "https://planetarycomputer.microsoft.com/api/stac/v1/collections/landsat-c2-l2",
+        "variables": ["red", "nir08"],
+        "geohash": "u0nd9w",
+        "time": {"start": "2024-06-01", "end": "2024-07-31"},
+        "target_dir": str(tmp_path),
+        "options": {"max_cloud_cover": 50},
+    }
+    report = cubesip.check(request, cfg)
+    assert report.ok, report.summary()
+    result = cubesip.run(request, cfg)
+    red = result.dataset["red"].load()
+    assert int(red.notnull().sum()) > 0  # real pixels, not fill values
+    assert result.manifest_rows[0]["crs"].startswith("EPSG:326")
