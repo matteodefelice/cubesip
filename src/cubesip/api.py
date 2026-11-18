@@ -4,22 +4,31 @@ Typical use::
 
     import cubesip
     req = cubesip.Request.from_json("examples/request_s2_ndvi.json")
-    report = cubesip.check(req)   # dataset found? cached? how big?
+    print(cubesip.check(req))     # cached? dataset found? how big?
     result = cubesip.run(req)     # NetCDF path + lazy xarray.Dataset
-
-Implemented in milestone M2.
 """
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import xarray as xr
 
-from cubesip.checker import CheckReport
-from cubesip.config import Config
+from cubesip import checker, spatial
+from cubesip.config import Config, load_config
+from cubesip.drivers import get_driver
+from cubesip.manifest import Manifest, make_rows
+from cubesip.output import open_netcdf, output_path
 from cubesip.request import Request
+
+log = logging.getLogger(__name__)
+
+RequestLike = Request | dict[str, Any] | str | Path
+ConfigLike = Config | str | Path | None
 
 
 @dataclass
@@ -30,20 +39,68 @@ class Result:
     manifest_rows: list[dict[str, str]] = field(default_factory=list)  # empty on cache hit
 
 
-def check(request: Request | dict, config: Config | str | Path | None = None) -> CheckReport:
+def check(request: RequestLike, config: ConfigLike = None) -> checker.CheckReport:
     """Validate the request and run the checker without downloading anything."""
-    raise NotImplementedError("M2")
+    return checker.check(_as_request(request), _as_config(config))
 
 
-def run(
-    request: Request | dict,
-    config: Config | str | Path | None = None,
-    *,
-    force: bool = False,
-) -> Result:
+def run(request: RequestLike, config: ConfigLike = None, *, force: bool = False) -> Result:
     """Execute a request.
 
     Cache hit (unless ``force``): return a lazy view of the cached file, write nothing.
-    Otherwise: driver.fetch -> NetCDF in target_dir -> append one manifest row per variable.
+    Otherwise: driver.fetch -> NetCDF in target_dir -> one manifest row per variable.
     """
-    raise NotImplementedError("M2")
+    req = _as_request(request)
+    cfg = _as_config(config)
+    driver = get_driver(req.driver, cfg)
+    driver.validate_options(req)
+    key = driver.dataset_key(req.dataset)
+    manifest = Manifest(cfg.manifest)
+
+    if not force:
+        hit = manifest.find_covering(req, key)
+        if hit is not None:
+            log.info("serving %s from cache %s", req.geohash, hit.path)
+            view = spatial.subset(open_netcdf(hit.path), req.bbox, req.time, req.variables)
+            return Result(path=hit.path, dataset=view, from_cache=True)
+
+    info = driver.describe(req)
+    if info.missing_variables:
+        raise KeyError(
+            f"variables not available in {key}: {info.missing_variables}; "
+            f"available: {info.available_variables}"
+        )
+
+    out_path = output_path(req, key)
+    partial = out_path.with_name(out_path.stem + ".partial.nc")
+    log.info("fetching %s %s for %s -> %s", req.driver, key, req.geohash, out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        driver.fetch(req, partial)
+        try:
+            os.replace(partial, out_path)
+        except PermissionError as exc:
+            raise PermissionError(
+                f"cannot replace {out_path}: it is open (e.g. an earlier Result.dataset); "
+                "close it with result.dataset.close() and retry"
+            ) from exc
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+
+    dataset = open_netcdf(out_path)
+    try:
+        crs = spatial.native_crs(dataset)
+    except ValueError:
+        crs = ""
+    rows = make_rows(req, dataset_key=key, path=out_path, crs=crs)
+    manifest.append(rows)
+    return Result(path=out_path, dataset=dataset, from_cache=False, manifest_rows=rows)
+
+
+def _as_request(request: RequestLike) -> Request:
+    return request if isinstance(request, Request) else Request.from_json(request)
+
+
+def _as_config(config: ConfigLike) -> Config:
+    return config if isinstance(config, Config) else load_config(config)

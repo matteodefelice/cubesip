@@ -5,7 +5,13 @@ from __future__ import annotations
 from importlib import import_module
 
 from cubesip.config import Config
-from cubesip.drivers.base import DatasetInfo, DatasetNotFoundError, Driver, SizeEstimate
+from cubesip.drivers.base import (
+    DatasetInfo,
+    DatasetNotFoundError,
+    Driver,
+    SizeEstimate,
+    XarraySourceDriver,
+)
 
 _REGISTRY = {
     "openeo": ("cubesip.drivers.openeo", "OpenEODriver"),
@@ -22,4 +28,11 @@ def get_driver(name: str, config: Config) -> Driver:
     return getattr(import_module(module_name), class_name)(config)
 
 
-__all__ = ["DatasetInfo", "DatasetNotFoundError", "Driver", "SizeEstimate", "get_driver"]
+__all__ = [
+    "DatasetInfo",
+    "DatasetNotFoundError",
+    "Driver",
+    "SizeEstimate",
+    "XarraySourceDriver",
+    "get_driver",
+]

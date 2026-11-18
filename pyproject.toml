@@ -46,6 +46,10 @@ addopts = "-m 'not live'"
 markers = [
     "live: hits a real remote service (openEO / Earth Data Hub); needs credentials in cubesip.yaml",
 ]
+filterwarnings = [
+    # rioxarray uses affine's deprecated `*` operator
+    "ignore::PendingDeprecationWarning:rioxarray",
+]
 
 [tool.ruff]
 line-length = 100

@@ -8,14 +8,13 @@ The JSON schema in ``schemas/request.schema.json`` is generated from this model
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-GEOHASH_ALPHABET = "0123456789bcdefghjkmnpqrstuvwxyz"
-MAX_GEOHASH_LENGTH = 12
+from cubesip import geohash as gh
 
 DriverName = Literal["openeo", "edh", "local"]
 
@@ -33,6 +32,14 @@ class TimeRange(BaseModel):
         if self.end < self.start:
             raise ValueError(f"time.end ({self.end}) is before time.start ({self.start})")
         return self
+
+    @property
+    def end_exclusive(self) -> date:
+        """The day after ``end``, for APIs whose upper bound is exclusive (openEO, slicing)."""
+        return self.end + timedelta(days=1)
+
+    def covers(self, other: TimeRange) -> bool:
+        return self.start <= other.start and self.end >= other.end
 
 
 class Request(BaseModel):
@@ -66,13 +73,7 @@ class Request(BaseModel):
     @field_validator("geohash")
     @classmethod
     def _valid_geohash(cls, value: str) -> str:
-        value = value.strip().lower()
-        if not 1 <= len(value) <= MAX_GEOHASH_LENGTH:
-            raise ValueError(f"geohash must have 1-{MAX_GEOHASH_LENGTH} characters, got {value!r}")
-        bad = sorted(set(value) - set(GEOHASH_ALPHABET))
-        if bad:
-            raise ValueError(f"geohash {value!r} contains invalid characters: {bad}")
-        return value
+        return gh.validate(value)
 
     @field_validator("variables")
     @classmethod
@@ -82,6 +83,16 @@ class Request(BaseModel):
             raise ValueError(f"duplicate variables: {dupes}")
         return value
 
+    @property
+    def bbox(self) -> gh.BBox:
+        """Geohash cell bounds in EPSG:4326."""
+        return gh.bbox(self.geohash)
+
+    @property
+    def options_key(self) -> str:
+        """Canonical JSON of ``options`` (sorted keys), used for cache matching."""
+        return canonical_json(self.options)
+
     @classmethod
     def from_json(cls, source: str | Path | dict[str, Any]) -> Request:
         """Build a request from a dict, a JSON string, or a path to a JSON file."""
@@ -90,6 +101,10 @@ class Request(BaseModel):
         if isinstance(source, str) and source.lstrip().startswith("{"):
             return cls.model_validate_json(source)
         return cls.model_validate_json(Path(source).read_text(encoding="utf-8"))
+
+
+def canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def request_json_schema() -> dict[str, Any]:

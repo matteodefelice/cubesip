@@ -1,5 +1,6 @@
 """cubesip: retrieve remote sensing and climate data cubes for a geohash cell."""
 
+from cubesip import geohash
 from cubesip.api import Result, check, run
 from cubesip.checker import CheckReport
 from cubesip.config import Config, load_config
@@ -14,6 +15,7 @@ __all__ = [
     "Result",
     "TimeRange",
     "check",
+    "geohash",
     "load_config",
     "run",
 ]

@@ -1,8 +1,13 @@
 # cubesip: implementation plan
 
 Companion to [plan.MD](plan.MD) (the goals). This file records the design decisions and the
-milestones to build it. The scaffold (package layout, config, request model, interfaces with
-`NotImplementedError("Mx")` stubs) already exists; each stub names the milestone that fills it.
+milestones to build it.
+
+**Status (2026-11-18):** M1-M5 implemented and covered by the offline test suite (85 tests).
+Earth Data Hub is tested against a local HTTP server that enforces `edh:<token>` basic auth;
+openEO `check()` was run live against CDSE and Planetary Computer metadata (no login).
+Not yet verified with real credentials: EDH downloads, openEO downloads (`uv run pytest -m live`).
+M6 (docs) partly done in README.
 
 ## 1. Decisions
 
@@ -27,7 +32,7 @@ milestones to build it. The scaffold (package layout, config, request model, int
 | openEO back-end | Copernicus Data Space Ecosystem (`https://openeo.dataspace.copernicus.eu`), configurable |
 | openEO auth | `oidc` (stored refresh token, device-code login the first time), `client_credentials` or `basic`, from the YAML |
 | openEO execution | Synchronous `download()` only; checker warns when the estimate exceeds `openeo.max_sync_bytes` |
-| EDH auth | Token in YAML, sent as basic auth (`edh:<token>`) via fsspec `storage_options`, never embedded in a printed URL |
+| EDH auth | Token in YAML, sent as a basic-auth `Authorization` header (`edh:<token>`) via fsspec `storage_options`, never embedded in a URL (aiohttp drops the header on cross-origin redirects) |
 | Local driver | Zarr, NetCDF, GeoTIFF/COG |
 | Output file name | `{target_dir}/{driver}_{dataset-slug}_{geohash}_{start}_{end}_{hash8}.nc` (`static` instead of dates; `hash8` from variables + options) |
 | Tooling | uv, Python ≥3.11 (3.12 pinned), src layout, pytest, ruff. Live tests marked `live`, skipped by default |
@@ -40,19 +45,20 @@ examples/                request JSON examples (S2 NDVI, Landsat via STAC, ERA5,
 schemas/                 request.schema.json (generated, test keeps it in sync)
 scripts/export_schema.py regenerates the schema
 src/cubesip/
-  __init__.py            public API: Request, check, run, load_config
-  request.py             Request / TimeRange model                 [done]
-  config.py              YAML config model + lookup                [done]
-  geohash.py             bbox, ancestors, covers                   [M1]
-  spatial.py             dims/CRS detection, bbox transform, subset [M1]
-  manifest.py            CSV read/append/lock, cache lookup         [M1, M2]
-  checker.py             CheckReport + check()                      [M2]
-  api.py                 check() / run() orchestration, Result      [M2]
-  drivers/base.py        Driver ABC, DatasetInfo, SizeEstimate     [done]
-  drivers/local.py       LocalDriver                                [M3]
-  drivers/edh.py         EarthDataHubDriver                         [M4]
-  drivers/openeo.py      OpenEODriver (load_collection + load_stac) [M5]
-tests/
+  __init__.py            public API: Request, check, run, load_config, geohash
+  request.py             Request / TimeRange model
+  config.py              YAML config model + lookup
+  geohash.py             bbox, encode, ancestors, covers
+  spatial.py             dims/CRS detection, bbox transform, subset
+  manifest.py            CSV read/append/lock, cache lookup
+  output.py              file naming, NetCDF writing/reading, provenance attrs
+  checker.py             CheckReport + check()
+  api.py                 check() / run() orchestration, Result
+  drivers/base.py        Driver ABC, XarraySourceDriver (shared by local + edh)
+  drivers/local.py       LocalDriver
+  drivers/edh.py         EarthDataHubDriver
+  drivers/openeo.py      OpenEODriver (load_collection + load_stac)
+tests/                   offline suite; test_live.py runs only with -m live
 ```
 
 ## 3. Components
@@ -141,17 +147,17 @@ Each milestone ends with green `uv run pytest` and `uv run ruff check .`.
 - End-to-end test fully offline: synthetic Zarr -> `run` -> NetCDF + manifest -> second `run`
   served from cache.
 
-**M4 Earth Data Hub driver**
-- Open `{url}/{dataset}.zarr` with `engine="zarr", chunks={}`, token via
-  `storage_options` (verify basic auth works with zarr 3 + fsspec; fallback: `edh:<token>@`
-  URL with the token redacted from every error message).
+**M4 Earth Data Hub driver** (done; live download not yet run)
+- Open `{url}/{dataset}.zarr` with `engine="zarr", chunks={}`, token as an `Authorization`
+  header via `storage_options` (verified with zarr 3 + fsspec against a local auth server,
+  zarr v2 and v3 stores).
 - `describe` = variables in the store; size exact; `fetch` = subset + `to_netcdf` (dask).
-- Live test (`-m live`): ERA5 `t2m` for `qem7`, one month.
+- Live test (`-m live`): ERA5 `t2m` for `u0nd9`, two days.
 - Docs: https://earthdatahub.destine.eu/getting-started and the ERA5 dataset page
   (dims `valid_time`, `latitude`, `longitude`; hourly; 0.25°).
 
-**M5 openEO driver**
-- `connect()`: `openeo.connect(url)` + auth method from YAML.
+**M5 openEO driver** (done; `check()` verified live without login, downloads not yet run)
+- `connect()`: `openeo.connect(url)` + auth method from YAML; login only when fetching.
 - Collections: `describe_collection(id)` for existence, band names (`cube:dimensions` /
   `summaries.eo:bands`), resolution and native CRS.
 - STAC URL: GET the collection JSON for existence and asset/band names; `load_stac`.
@@ -159,19 +165,22 @@ Each milestone ends with green `uv run pytest` and `uv run ruff check .`.
   `temporal_extent=[start, end+1d]`, `bands`, `max_cloud_cover` / `properties`;
   `cube.download(out_path, format="netCDF")`.
 - Size estimate: pixels (box in native CRS / resolution) × bands × 4 bytes × time steps.
-  Time steps from a STAC item search (pystac-client) when a STAC endpoint is known (always for
-  `load_stac`; for CDSE collections via the CDSE STAC API if the id mapping is simple),
-  otherwise reported as `method="unknown"` with a warning.
-- Live tests: SENTINEL2_L2A one month for a level-6 geohash; Planetary Computer `landsat-c2-l2`.
+  Time steps = distinct acquisition dates from a STAC item search (pystac-client), filtered by
+  `max_cloud_cover`: the collection itself for `load_stac`; for openEO collections the STAC
+  collection linked as `derived_from` (CDSE: `sentinel-2-l2a`). Without one, an upper bound
+  assuming daily steps.
+- Live test: SENTINEL2_L2A two weeks for a level-6 geohash, then a child geohash from cache.
 
-**M6 Docs**
+**M1-M3** done as described above.
+
+**M6 Docs** (README usage, request fields, cache rules done)
 - README walkthrough of the NDVI use case (request -> check -> run -> NDVI with xarray).
 
 ## 5. Risks and things to verify during implementation
 
 1. **Planetary Computer through CDSE `load_stac`**: PC assets need signed URLs (SAS tokens).
-   Verify early in M5 that the CDSE back-end can read them; if not, document the limitation or
-   find a supported alternative.
+   Still to verify with a logged-in download; also whether `load_stac` band names are the
+   asset keys (`red`, `nir08`) as cubesip assumes.
 2. **openEO synchronous limits**: large requests time out. Batch jobs are out of scope, so the
    checker's size warning is the safeguard; tune `max_sync_bytes` after the first live runs.
 3. **openEO NetCDF CRS metadata**: confirm CDSE output carries a grid mapping that
