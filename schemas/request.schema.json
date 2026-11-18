@@ -1,0 +1,96 @@
+{
+  "$defs": {
+    "TimeRange": {
+      "additionalProperties": false,
+      "description": "Closed date interval: both ``start`` and ``end`` days are included.",
+      "properties": {
+        "start": {
+          "description": "First day (inclusive), ISO format YYYY-MM-DD.",
+          "format": "date",
+          "title": "Start",
+          "type": "string"
+        },
+        "end": {
+          "description": "Last day (inclusive), ISO format YYYY-MM-DD.",
+          "format": "date",
+          "title": "End",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "TimeRange",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A data request for one dataset, one geohash cell and an optional time range.",
+  "properties": {
+    "driver": {
+      "description": "Data source: 'openeo' (collections or STAC via load_stac), 'edh' (Earth Data Hub Zarr), 'local' (Zarr/NetCDF/GeoTIFF on disk).",
+      "enum": [
+        "openeo",
+        "edh",
+        "local"
+      ],
+      "title": "Driver",
+      "type": "string"
+    },
+    "dataset": {
+      "description": "openeo: collection id (e.g. SENTINEL2_L2A) or STAC collection URL; edh: dataset path (e.g. era5/era5-single-levels-atmosphere-v0) or full URL; local: path to the store/file.",
+      "minLength": 1,
+      "title": "Dataset",
+      "type": "string"
+    },
+    "variables": {
+      "description": "Bands / variables to retrieve, e.g. ['B04', 'B08'] or ['t2m'].",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Variables",
+      "type": "array"
+    },
+    "geohash": {
+      "description": "Area of interest as a geohash cell, e.g. 'qem7'.",
+      "title": "Geohash",
+      "type": "string"
+    },
+    "time": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TimeRange"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Days to retrieve (inclusive); null for static datasets."
+    },
+    "target_dir": {
+      "description": "Local directory where the NetCDF output is written.",
+      "format": "path",
+      "title": "Target Dir",
+      "type": "string"
+    },
+    "options": {
+      "additionalProperties": true,
+      "description": "Driver-specific extras, e.g. {'max_cloud_cover': 60} for openeo.",
+      "title": "Options",
+      "type": "object"
+    }
+  },
+  "required": [
+    "driver",
+    "dataset",
+    "variables",
+    "geohash",
+    "target_dir"
+  ],
+  "title": "cubesip request",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

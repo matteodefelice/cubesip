@@ -1,0 +1,55 @@
+[project]
+name = "cubesip"
+version = "0.1.0.dev0"
+description = "Retrieve remote sensing and climate data cubes for regional or site-specific analysis, addressed by geohash."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Matteo De Felice" }]
+dependencies = [
+    # core data model
+    "xarray>=2024.10",
+    "dask>=2024.8",
+    "pandas>=2.2",
+    "netcdf4>=1.7",
+    "pyproj>=3.6",
+    "rioxarray>=0.17",
+    # request / config / manifest
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "filelock>=3.13",
+    # Earth Data Hub (streamed Zarr over HTTPS)
+    "zarr>=3.0",
+    "fsspec>=2024.6",
+    "aiohttp>=3.9",
+    "requests>=2.31",
+    # openEO (collections + load_stac) and STAC metadata lookups
+    "openeo>=0.40",
+    "pystac-client>=0.8",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cubesip"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = [
+    "live: hits a real remote service (openEO / Earth Data Hub); needs credentials in cubesip.yaml",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

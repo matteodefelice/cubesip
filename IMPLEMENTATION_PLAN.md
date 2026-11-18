@@ -1,0 +1,185 @@
+# cubesip: implementation plan
+
+Companion to [plan.MD](plan.MD) (the goals). This file records the design decisions and the
+milestones to build it. The scaffold (package layout, config, request model, interfaces with
+`NotImplementedError("Mx")` stubs) already exists; each stub names the milestone that fills it.
+
+## 1. Decisions
+
+### Agreed with the user (2026-11-18)
+
+| Topic | Decision |
+|---|---|
+| Manifest format | **CSV**, one row per variable, appends guarded by a lock file |
+| Cache reuse | **Lazy view only**: on a cache hit `run()` returns the cached file path + an xarray view subset to the request. No new file, no new manifest row |
+| Output grid | **Native CRS** of each source (UTM for Sentinel-2, lat/lon for ERA5). The geohash box is transformed into that CRS for clipping; no resampling |
+
+### Defaults chosen (change here if you disagree)
+
+| Topic | Default |
+|---|---|
+| Area | One geohash per request (1-12 chars), lower-cased. The geohash cell box is the area |
+| Spatial selection | Keep every cell that **intersects** the box (box grown by half a cell), so a small geohash on ERA5's 0.25° grid never returns empty |
+| Time | `{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}`, **both days inclusive**; `null` for static data. Drivers convert to their own convention (openEO end is exclusive -> `end + 1 day`; hourly data -> `start <= t < end + 1 day`) |
+| API | Two steps: `cubesip.check(request)` (no download) then `cubesip.run(request)`. `run(force=True)` bypasses the cache |
+| Manifest write | Automatic after a successful download; the new rows are also returned in `Result.manifest_rows` |
+| Request input | JSON file / JSON string / dict, validated by a pydantic model; JSON schema generated into `schemas/request.schema.json` |
+| openEO back-end | Copernicus Data Space Ecosystem (`https://openeo.dataspace.copernicus.eu`), configurable |
+| openEO auth | `oidc` (stored refresh token, device-code login the first time), `client_credentials` or `basic`, from the YAML |
+| openEO execution | Synchronous `download()` only; checker warns when the estimate exceeds `openeo.max_sync_bytes` |
+| EDH auth | Token in YAML, sent as basic auth (`edh:<token>`) via fsspec `storage_options`, never embedded in a printed URL |
+| Local driver | Zarr, NetCDF, GeoTIFF/COG |
+| Output file name | `{target_dir}/{driver}_{dataset-slug}_{geohash}_{start}_{end}_{hash8}.nc` (`static` instead of dates; `hash8` from variables + options) |
+| Tooling | uv, Python ≥3.11 (3.12 pinned), src layout, pytest, ruff. Live tests marked `live`, skipped by default |
+
+## 2. Layout
+
+```
+cubesip.example.yaml     config template (copy to cubesip.yaml, git-ignored)
+examples/                request JSON examples (S2 NDVI, Landsat via STAC, ERA5, local static)
+schemas/                 request.schema.json (generated, test keeps it in sync)
+scripts/export_schema.py regenerates the schema
+src/cubesip/
+  __init__.py            public API: Request, check, run, load_config
+  request.py             Request / TimeRange model                 [done]
+  config.py              YAML config model + lookup                [done]
+  geohash.py             bbox, ancestors, covers                   [M1]
+  spatial.py             dims/CRS detection, bbox transform, subset [M1]
+  manifest.py            CSV read/append/lock, cache lookup         [M1, M2]
+  checker.py             CheckReport + check()                      [M2]
+  api.py                 check() / run() orchestration, Result      [M2]
+  drivers/base.py        Driver ABC, DatasetInfo, SizeEstimate     [done]
+  drivers/local.py       LocalDriver                                [M3]
+  drivers/edh.py         EarthDataHubDriver                         [M4]
+  drivers/openeo.py      OpenEODriver (load_collection + load_stac) [M5]
+tests/
+```
+
+## 3. Components
+
+### Request (JSON)
+
+```json
+{
+  "driver": "openeo",
+  "dataset": "SENTINEL2_L2A",
+  "variables": ["B04", "B08", "SCL"],
+  "geohash": "qem7k2",
+  "time": {"start": "2024-01-01", "end": "2024-12-31"},
+  "target_dir": "./data",
+  "options": {"max_cloud_cover": 60}
+}
+```
+
+`options` are driver-specific: openeo `max_cloud_cover` (mapped to `eo:cloud_cover` property
+filter for `load_stac`) and `properties`; none yet for edh/local.
+
+### Config (YAML)
+
+See `cubesip.example.yaml`. Lookup: explicit path -> `$CUBESIP_CONFIG` -> `./cubesip.yaml` ->
+`~/.config/cubesip/cubesip.yaml`. Secrets are `SecretStr` (hidden in reprs).
+
+### Manifest (CSV)
+
+Columns (`manifest.COLUMNS`): `request_id, timestamp_utc, user, hostname, driver, dataset,
+variable, geohash, time_start, time_end, options, crs, file_size_bytes, uri, cubesip_version`.
+`user` = `getpass.getuser()`, `hostname` = `socket.gethostname()`, `uri` = `file:///...`.
+
+### Checker / cache rules
+
+`check()` runs, in order:
+
+1. **Cache lookup** in the manifest. A file covers the request when, for the rows sharing a `uri`:
+   - same `driver`, `dataset` and canonical `options` JSON;
+   - row `geohash` is the request geohash or one of its ancestors (prefix rule);
+   - time: both null, or `time_start <= start` and `time_end >= end`;
+   - every requested variable is present;
+   - the file still exists on disk.
+   Pick the longest matching geohash, then the most recent. Partial coverage (e.g. half the
+   time range) counts as a miss: the whole request is fetched. Mosaicking child cells is not
+   supported.
+2. **Dataset check** (only on a miss): dataset exists on the source and requested variables are
+   available (`DatasetNotFoundError` / `missing_variables`).
+3. **Size estimate**: exact for edh/local (`subset.nbytes`); for openEO an estimate (see M5).
+   Warnings: size above `max_sync_bytes`, unknown size, missing variables.
+
+`CheckReport.ok` tells whether `run()` can proceed.
+
+### run()
+
+- Cache hit (and not `force`): open cached NetCDF lazily, `spatial.subset()` to the request box
+  (transformed to the file's CRS) / days / variables. Return `Result(path=cached, dataset=view,
+  from_cache=True, manifest_rows=[])`.
+- Miss: `driver.fetch(request, out_path)` -> NetCDF -> manifest append (one row per variable,
+  shared `request_id`) -> `Result(path=new, dataset=lazy open, from_cache=False, rows)`.
+- Write to a temp name and rename on success so a failed download never leaves a half file
+  that the manifest could point to.
+
+## 4. Milestones
+
+Each milestone ends with green `uv run pytest` and `uv run ruff check .`.
+
+**M1 Core (offline)**
+- `geohash`: `bbox` (decode), `ancestors`, `covers`. Tests against known values
+  (e.g. `ezs42` from the Wikipedia example).
+- `spatial`: `find_dims` (CF `axis`/`standard_name`, then names incl. `valid_time`),
+  `native_crs` (rioxarray `rio.crs`, CF `grid_mapping`, else EPSG:4326 for lat/lon),
+  `to_native_bounds` (pyproj `Transformer.transform_bounds` with densification),
+  `subset` (0..360 longitudes, descending latitude, half-cell growth, inclusive end day).
+  Tests on synthetic datasets: lat/lon ascending + descending, 0..360, UTM, static (no time).
+- `manifest`: `read`, `append` with `filelock`, header on first write.
+
+**M2 Checker + API (offline)**
+- `Manifest.find_covering` with the rules above.
+- `checker.check`, `api.check`, `api.run` (temp-file + rename, manifest append, lazy result).
+- Tests with a fake in-memory driver: miss -> fetch -> rows; repeat -> cache hit on same
+  geohash; child geohash / shorter time -> hit on parent file; different options -> miss;
+  deleted file -> miss; `force=True` -> fetch.
+
+**M3 Local driver**
+- Zarr / NetCDF / GeoTIFF open, `describe`, exact size, `fetch` = subset + `to_netcdf`.
+- End-to-end test fully offline: synthetic Zarr -> `run` -> NetCDF + manifest -> second `run`
+  served from cache.
+
+**M4 Earth Data Hub driver**
+- Open `{url}/{dataset}.zarr` with `engine="zarr", chunks={}`, token via
+  `storage_options` (verify basic auth works with zarr 3 + fsspec; fallback: `edh:<token>@`
+  URL with the token redacted from every error message).
+- `describe` = variables in the store; size exact; `fetch` = subset + `to_netcdf` (dask).
+- Live test (`-m live`): ERA5 `t2m` for `qem7`, one month.
+- Docs: https://earthdatahub.destine.eu/getting-started and the ERA5 dataset page
+  (dims `valid_time`, `latitude`, `longitude`; hourly; 0.25°).
+
+**M5 openEO driver**
+- `connect()`: `openeo.connect(url)` + auth method from YAML.
+- Collections: `describe_collection(id)` for existence, band names (`cube:dimensions` /
+  `summaries.eo:bands`), resolution and native CRS.
+- STAC URL: GET the collection JSON for existence and asset/band names; `load_stac`.
+- `fetch`: `load_collection` / `load_stac` with `spatial_extent={west,south,east,north,crs:4326}`,
+  `temporal_extent=[start, end+1d]`, `bands`, `max_cloud_cover` / `properties`;
+  `cube.download(out_path, format="netCDF")`.
+- Size estimate: pixels (box in native CRS / resolution) × bands × 4 bytes × time steps.
+  Time steps from a STAC item search (pystac-client) when a STAC endpoint is known (always for
+  `load_stac`; for CDSE collections via the CDSE STAC API if the id mapping is simple),
+  otherwise reported as `method="unknown"` with a warning.
+- Live tests: SENTINEL2_L2A one month for a level-6 geohash; Planetary Computer `landsat-c2-l2`.
+
+**M6 Docs**
+- README walkthrough of the NDVI use case (request -> check -> run -> NDVI with xarray).
+
+## 5. Risks and things to verify during implementation
+
+1. **Planetary Computer through CDSE `load_stac`**: PC assets need signed URLs (SAS tokens).
+   Verify early in M5 that the CDSE back-end can read them; if not, document the limitation or
+   find a supported alternative.
+2. **openEO synchronous limits**: large requests time out. Batch jobs are out of scope, so the
+   checker's size warning is the safeguard; tune `max_sync_bytes` after the first live runs.
+3. **openEO NetCDF CRS metadata**: confirm CDSE output carries a grid mapping that
+   `spatial.native_crs` can read (needed for cache reuse).
+4. **Manifest on a synced folder**: the repo lives under OneDrive. A lock file protects
+   concurrent writes on one machine/network share, but OneDrive sync between machines can still
+   create conflict copies. Keep the shared manifest on a network share or a non-synced folder.
+5. **Virtualenv under OneDrive**: `uv sync` creates `.venv` here and OneDrive will try to sync
+   thousands of files. Set `UV_PROJECT_ENVIRONMENT` to a path outside OneDrive.
+6. **Cache key on options**: options are compared as canonical JSON; semantically equal but
+   differently written options (e.g. `60` vs `60.0`) miss the cache. Acceptable for now.

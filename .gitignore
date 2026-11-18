@@ -1,0 +1,31 @@
+# --- cubesip: never commit credentials ---
+cubesip.yaml
+*.cubesip.yaml
+.netrc
+
+# --- cubesip: local outputs ---
+data/
+*.nc
+*.zarr/
+manifest.csv
+manifest.csv.lock
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# --- OS / editors ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

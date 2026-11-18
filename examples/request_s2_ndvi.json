@@ -1,0 +1,9 @@
+{
+  "driver": "openeo",
+  "dataset": "SENTINEL2_L2A",
+  "variables": ["B04", "B08", "SCL"],
+  "geohash": "qem7k2",
+  "time": {"start": "2024-01-01", "end": "2024-12-31"},
+  "target_dir": "./data",
+  "options": {"max_cloud_cover": 60}
+}
