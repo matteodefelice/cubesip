@@ -47,6 +47,32 @@ collection's STAC `raster:bands` metadata. For example, Landsat Collection 2 Lev
 reflectance is `DN * 2.75e-5 - 0.2`; with a non-zero offset, an NDVI computed on raw values
 is wrong.
 
+### Examples
+
+Two scripts in [examples/](examples/) compute a yearly metric for one site. Both make one
+cubesip request per year, write a PNG chart and a CSV table to `data/`, and read the cached
+files instead of downloading when run again. Both default to the same cropland cell in the
+Beauce plain (France); pass `--lat/--lon` or `--geohash` for your own site.
+
+[examples/ndvi_yearly.py](examples/ndvi_yearly.py): yearly mean NDVI from Sentinel-2 (openEO).
+Clouds, shadows and snow are masked with the scene classification band; the yearly value is
+the mean of monthly means, so summer's many clear scenes don't outweigh the winter.
+
+```bash
+uv run --group examples python examples/ndvi_yearly.py
+uv run --group examples python examples/ndvi_yearly.py --lat 45.30 --lon 9.50 --years 2020 2024
+```
+
+[examples/precip_p90_yearly.py](examples/precip_p90_yearly.py): yearly 90th percentile of
+daily precipitation from ERA5 (Earth Data Hub). Hourly `tp` is summed into daily totals
+(each value is the hour ending at its timestamp) and the percentile is taken over wet days
+(>= 1 mm; `--wet-day-threshold 0` uses every day).
+
+```bash
+uv run --group examples python examples/precip_p90_yearly.py
+uv run --group examples python examples/precip_p90_yearly.py --years 1995 2024 --percentile 95
+```
+
 ### Requests
 
 Request documents follow [schemas/request.schema.json](schemas/request.schema.json); see
