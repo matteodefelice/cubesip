@@ -1,0 +1,88 @@
+"""YAML configuration: credentials for openEO / Earth Data Hub and the manifest location.
+
+The real file (``cubesip.yaml``) is git-ignored; ``cubesip.example.yaml`` is the template.
+Secrets are held as ``SecretStr`` so they never show up in reprs, logs or tracebacks.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
+
+ENV_VAR = "CUBESIP_CONFIG"
+DEFAULT_LOCATIONS = (
+    Path("cubesip.yaml"),
+    Path.home() / ".config" / "cubesip" / "cubesip.yaml",
+)
+
+
+class _Section(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class OpenEOAuth(_Section):
+    method: Literal["oidc", "client_credentials", "basic"] = "oidc"
+    provider_id: str | None = None
+    client_id: str | None = None
+    client_secret: SecretStr | None = None
+    username: str | None = None
+    password: SecretStr | None = None
+
+
+class OpenEOConfig(_Section):
+    url: str = "https://openeo.dataspace.copernicus.eu"
+    auth: OpenEOAuth = Field(default_factory=OpenEOAuth)
+    max_sync_bytes: int = 500_000_000
+
+
+class EarthDataHubConfig(_Section):
+    url: str = "https://data.earthdatahub.destine.eu"
+    token: SecretStr | None = None
+
+
+class Config(_Section):
+    manifest: Path
+    openeo: OpenEOConfig = Field(default_factory=OpenEOConfig)
+    earthdatahub: EarthDataHubConfig = Field(default_factory=EarthDataHubConfig)
+
+
+def find_config(path: str | Path | None = None) -> Path:
+    """Resolve the config file: explicit path, then $CUBESIP_CONFIG, then default locations."""
+    if path is not None:
+        candidates = [Path(path)]
+    elif os.environ.get(ENV_VAR):
+        candidates = [Path(os.environ[ENV_VAR])]
+    else:
+        candidates = list(DEFAULT_LOCATIONS)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    tried = ", ".join(str(c) for c in candidates)
+    raise FileNotFoundError(
+        f"No cubesip config found (tried: {tried}). Copy cubesip.example.yaml to cubesip.yaml."
+    )
+
+
+def load_config(path: str | Path | None = None) -> Config:
+    """Load and validate the YAML config. Relative manifest paths resolve against the file."""
+    config_path = find_config(path)
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    # Empty strings in the template mean "not set".
+    for section in ("openeo", "earthdatahub"):
+        _drop_empty(raw.get(section))
+    config = Config.model_validate(raw)
+    if not config.manifest.is_absolute():
+        config.manifest = (config_path.parent / config.manifest).resolve()
+    return config
+
+
+def _drop_empty(node: object) -> None:
+    if isinstance(node, dict):
+        for key in [k for k, v in node.items() if v == ""]:
+            del node[key]
+        for value in node.values():
+            _drop_empty(value)

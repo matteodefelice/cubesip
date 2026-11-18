@@ -1,0 +1,27 @@
+# cubesip configuration TEMPLATE.
+# Copy to `cubesip.yaml` (git-ignored) and fill in your credentials.
+# Lookup order: explicit path -> $CUBESIP_CONFIG -> ./cubesip.yaml -> ~/.config/cubesip/cubesip.yaml
+
+# CSV manifest shared by all requests (one row per variable per file).
+manifest: ./data/manifest.csv
+
+openeo:
+  url: https://openeo.dataspace.copernicus.eu
+  auth:
+    # oidc               -> stored refresh token, falls back to device-code login (browser, first time only)
+    # client_credentials -> non-interactive; needs a client registered with the back-end
+    # basic              -> username/password (only if the back-end supports it)
+    method: oidc
+    # provider_id: CDSE
+    # client_id: ""
+    # client_secret: ""
+    # username: ""
+    # password: ""
+  # Synchronous downloads above this estimated size are flagged by the checker
+  # (batch jobs are out of scope for now).
+  max_sync_bytes: 500000000
+
+earthdatahub:
+  url: https://data.earthdatahub.destine.eu
+  # Personal access token from your Earth Data Hub account (https://earthdatahub.destine.eu)
+  token: ""

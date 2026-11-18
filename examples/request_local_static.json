@@ -1,0 +1,8 @@
+{
+  "driver": "local",
+  "dataset": "./data/dem.zarr",
+  "variables": ["elevation"],
+  "geohash": "qem7",
+  "time": null,
+  "target_dir": "./data"
+}

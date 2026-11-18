@@ -1,0 +1,9 @@
+{
+  "driver": "openeo",
+  "dataset": "https://planetarycomputer.microsoft.com/api/stac/v1/collections/landsat-c2-l2",
+  "variables": ["red", "nir08", "qa_pixel"],
+  "geohash": "qem7k2",
+  "time": {"start": "2024-06-01", "end": "2024-08-31"},
+  "target_dir": "./data",
+  "options": {"max_cloud_cover": 50}
+}
