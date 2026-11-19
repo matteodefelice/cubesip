@@ -55,10 +55,11 @@ def run(request: RequestLike, config: ConfigLike = None, *, force: bool = False)
     driver = get_driver(req.driver, cfg)
     driver.validate(req)
     key = driver.dataset_key(req.dataset)
+    backend = driver.backend_url
     manifest = Manifest(cfg.manifest)
 
     if not force:
-        hit = manifest.find_covering(req, key)
+        hit = manifest.find_covering(req, key, backend)
         if hit is not None:
             log.info("serving %s from cache %s", req.geohash, hit.path)
             view = spatial.subset(open_netcdf(hit.path), req.bbox, req.time, req.variables)
@@ -71,7 +72,7 @@ def run(request: RequestLike, config: ConfigLike = None, *, force: bool = False)
             f"available: {info.available_variables}"
         )
 
-    out_path = output_path(req, key)
+    out_path = output_path(req, key, backend)
     partial = out_path.with_name(out_path.stem + ".partial.nc")
     log.info("fetching %s %s for %s -> %s", req.driver, key, req.geohash, out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,7 +94,7 @@ def run(request: RequestLike, config: ConfigLike = None, *, force: bool = False)
         crs = spatial.native_crs(dataset)
     except ValueError:
         crs = ""
-    rows = make_rows(req, dataset_key=key, path=out_path, crs=crs)
+    rows = make_rows(req, dataset_key=key, path=out_path, crs=crs, backend=backend)
     manifest.append(rows)
     return Result(path=out_path, dataset=dataset, from_cache=False, manifest_rows=rows)
 

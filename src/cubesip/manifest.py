@@ -29,6 +29,7 @@ COLUMNS = [
     "hostname",  # socket.gethostname()
     "driver",
     "dataset",  # normalised by the driver (see Driver.dataset_key)
+    "backend",  # service the data came from (Driver.backend_url); empty for local files
     "variable",  # one row per variable
     "geohash",
     "time_start",  # inclusive day, empty for static datasets
@@ -52,6 +53,7 @@ class CacheHit:
     geohash: str  # geohash of the cached file (equal to or an ancestor of the request's)
     request_id: str
     timestamp_utc: str
+    backend: str = ""  # empty: written before cubesip recorded back-ends
 
 
 def path_to_uri(path: Path) -> str:
@@ -74,6 +76,7 @@ def make_rows(
     dataset_key: str,
     path: Path,
     crs: str,
+    backend: str = "",
     request_id: str | None = None,
 ) -> list[dict[str, str]]:
     """Manifest rows (one per variable) for a file that was just written."""
@@ -86,6 +89,7 @@ def make_rows(
         "hostname": _safe(socket.gethostname),
         "driver": request.driver,
         "dataset": dataset_key,
+        "backend": backend,
         "geohash": request.geohash,
         "time_start": request.time.start.isoformat() if request.time else "",
         "time_end": request.time.end.isoformat() if request.time else "",
@@ -128,19 +132,37 @@ class Manifest:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with FileLock(self.lock_path, timeout=LOCK_TIMEOUT_S):
             new_file = not self.path.is_file() or self.path.stat().st_size == 0
+            if not new_file and self._header() != COLUMNS:
+                self._upgrade()
             with self.path.open("a", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(handle, fieldnames=COLUMNS, restval="")
                 if new_file:
                     writer.writeheader()
                 writer.writerows(rows)
 
-    def find_covering(self, request: Request, dataset_key: str) -> CacheHit | None:
+    def _header(self) -> list[str]:
+        with self.path.open(newline="", encoding="utf-8") as handle:
+            return next(csv.reader(handle), [])
+
+    def _upgrade(self) -> None:
+        """Rewrite a manifest from an older version with the current columns (call under the
+        lock). Appending to it as it is would put values under the wrong headers."""
+        frame = self.read()  # adds missing columns as empty strings
+        extra = [column for column in frame.columns if column not in COLUMNS]
+        tmp = self.path.with_name(self.path.name + ".upgrade")
+        frame[COLUMNS + extra].to_csv(tmp, index=False, encoding="utf-8")
+        tmp.replace(self.path)
+
+    def find_covering(
+        self, request: Request, dataset_key: str, backend: str = ""
+    ) -> CacheHit | None:
         """Best cached file covering the request.
 
-        A file covers the request when its rows have the same driver, dataset and options,
-        its geohash is the request's or an ancestor, its period contains the requested days
-        (or both are static), it holds every requested variable and it still exists.
-        The longest geohash wins, then the most recent file.
+        A file covers the request when its rows have the same driver, dataset, back-end and
+        options, its geohash is the request's or an ancestor, its period contains the
+        requested days (or both are static), it holds every requested variable and it still
+        exists. Rows without a back-end (written before cubesip recorded it) match any
+        back-end. The longest geohash wins, then a recorded back-end, then the most recent.
         """
         frame = self.read()
         if frame.empty:
@@ -148,6 +170,7 @@ class Manifest:
         frame = frame[
             (frame["driver"] == request.driver)
             & (frame["dataset"] == dataset_key)
+            & ((frame["backend"] == backend) | (frame["backend"] == ""))
             & (frame["options"] == request.options_key)
             & frame["geohash"].isin(gh.ancestors(request.geohash))
         ]
@@ -182,8 +205,11 @@ class Manifest:
                     geohash=str(latest["geohash"]),
                     request_id=str(latest["request_id"]),
                     timestamp_utc=str(latest["timestamp_utc"]),
+                    backend=str(latest["backend"]),
                 )
             )
         if not candidates:
             return None
-        return max(candidates, key=lambda hit: (len(hit.geohash), hit.timestamp_utc))
+        return max(
+            candidates, key=lambda hit: (len(hit.geohash), bool(hit.backend), hit.timestamp_utc)
+        )

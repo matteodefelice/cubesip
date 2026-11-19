@@ -254,6 +254,12 @@ def test_each_driver_uses_its_backend(tmp_path: Path) -> None:
     defaults = Config(manifest=tmp_path / "m.csv")
     assert get_driver("cdse_federation", defaults).backend.url == CDSE_FEDERATION_URL
     assert get_driver("openeo", defaults).backend.url == "https://openeo.dataspace.copernicus.eu"
+    # backend_url (stored in the manifest) is the executing back-end, without trailing slash
+    config.openeo.url = "https://openeo.example.eu/"
+    assert get_driver("openeo", config).backend_url == "https://openeo.example.eu"
+    assert get_driver("stac", config).backend_url == "https://fed.example.eu"
+    assert get_driver("local", config).backend_url == ""
+    assert get_driver("edh", defaults).backend_url == "https://data.earthdatahub.destine.eu"
 
 
 def test_federation_loads_collections(tmp_path: Path, monkeypatch) -> None:

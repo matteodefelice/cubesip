@@ -87,9 +87,15 @@ def check(request: Request, config: Config, driver: Driver | None = None) -> Che
         return report
 
     key = driver.dataset_key(request.dataset)
-    report.cache_hit = Manifest(config.manifest).find_covering(request, key)
+    backend = driver.backend_url
+    report.cache_hit = Manifest(config.manifest).find_covering(request, key, backend)
     if report.cache_hit is not None:
         log.info("cache hit: %s", report.cache_hit.path)
+        if backend and not report.cache_hit.backend:
+            report.warnings.append(
+                "the cached file was recorded before cubesip tracked back-ends; it is assumed "
+                f"to come from {backend} (run with force=True to download it again)"
+            )
         return report
 
     try:

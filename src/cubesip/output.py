@@ -24,26 +24,29 @@ def dataset_slug(dataset_key: str) -> str:
     return slug[:40] or "dataset"
 
 
-def output_path(request: Request, dataset_key: str) -> Path:
-    """``{target_dir}/{driver}_{slug}_{geohash}_{start}-{end}_{hash8}.nc``."""
+def output_path(request: Request, dataset_key: str, backend: str = "") -> Path:
+    """``{target_dir}/{driver}_{slug}_{geohash}_{start}-{end}_{hash8}.nc``.
+
+    ``hash8`` covers dataset, variables, options and back-end, so the same request sent to
+    two back-ends gives two files instead of one overwriting the other.
+    """
     if request.time is None:
         period = "static"
     else:
         period = f"{request.time.start:%Y%m%d}-{request.time.end:%Y%m%d}"
-    digest = hashlib.sha1(
-        canonical_json(
-            {
-                "dataset": dataset_key,
-                "variables": sorted(request.variables),
-                "options": request.options,
-            }
-        ).encode()
-    ).hexdigest()[:8]
+    identity = {
+        "dataset": dataset_key,
+        "variables": sorted(request.variables),
+        "options": request.options,
+    }
+    if backend:  # left out when empty so local file names stay as they were
+        identity["backend"] = backend
+    digest = hashlib.sha1(canonical_json(identity).encode()).hexdigest()[:8]
     name = f"{request.driver}_{dataset_slug(dataset_key)}_{request.geohash}_{period}_{digest}.nc"
     return Path(request.target_dir).expanduser().resolve() / name
 
 
-def provenance_attrs(request: Request, dataset_key: str) -> dict[str, str]:
+def provenance_attrs(request: Request, dataset_key: str, backend: str = "") -> dict[str, str]:
     from cubesip import __version__
 
     attrs = {
@@ -53,6 +56,8 @@ def provenance_attrs(request: Request, dataset_key: str) -> dict[str, str]:
         "cubesip_geohash": request.geohash,
         "cubesip_options": request.options_key,
     }
+    if backend:
+        attrs["cubesip_backend"] = backend
     if request.time is not None:
         attrs["cubesip_time_start"] = request.time.start.isoformat()
         attrs["cubesip_time_end"] = request.time.end.isoformat()
