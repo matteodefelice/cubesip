@@ -18,6 +18,17 @@ Live runs on CDSE (`uv run pytest -m live`), login via stored refresh token:
 
 All drivers are now verified end to end. M6 (docs) partly done in README.
 
+**Driver split (2026-11-19):** the single openEO driver is now three drivers with one meaning
+each: `openeo` (collections of the back-end in `openeo.url`), `cdse_federation` (collections
+of the CDSE openEO Federation) and `stac` (STAC collection URLs via `load_stac`). Live
+`check()` passes for all three (S2 on CDSE, `TERRASCOPE_S2_NDVI_V2` on the federation,
+Planetary Computer Landsat via `stac`). Federation downloads verified directly:
+`SENTINEL2_L2A` (routed to CDSE), `AGERA5` and `TERRASCOPE_S2_NDVI_V2` (Terrascope, July 2024,
+5 clear dates). The federation logs in with its own OIDC client (one device-code login, then
+a stored refresh token). With no valid pixel in the request (one fully cloudy scene) it
+answers HTTP 200 with an empty body; the openEO drivers now raise `EmptyResultError` instead
+of leaving a 0-byte file. `auth.client_id` is now passed to the oidc login (it was ignored).
+
 ## 1. Decisions
 
 ### Agreed with the user (2026-11-18)
@@ -38,9 +49,9 @@ All drivers are now verified end to end. M6 (docs) partly done in README.
 | API | Two steps: `cubesip.check(request)` (no download) then `cubesip.run(request)`. `run(force=True)` bypasses the cache |
 | Manifest write | Automatic after a successful download; the new rows are also returned in `Result.manifest_rows` |
 | Request input | JSON file / JSON string / dict, validated by a pydantic model; JSON schema generated into `schemas/request.schema.json` |
-| openEO back-end | Copernicus Data Space Ecosystem (`https://openeo.dataspace.copernicus.eu`), configurable |
-| openEO auth | `oidc` (stored refresh token, device-code login the first time), `client_credentials` or `basic`, from the YAML |
-| openEO execution | Synchronous `download()` only; checker warns when the estimate exceeds `openeo.max_sync_bytes` |
+| Drivers | `openeo`: collections of the back-end at `openeo.url` (any on https://hub.openeo.org; default CDSE `https://openeo.dataspace.copernicus.eu`). `cdse_federation`: collections of `https://openeofed.dataspace.copernicus.eu` (CDSE + Terrascope). `stac`: STAC collection URL, `load_stac` on the back-end named in `stac.backend` (`openeo` default, or `cdse_federation`). `edh`: Earth Data Hub Zarr. `local`: files on disk. Each driver accepts one kind of `dataset` and refuses the other kind with a pointer to the right driver |
+| openEO auth | Per back-end section (`openeo`, `cdse_federation`): `oidc` (stored refresh token, device-code login the first time), `client_credentials` or `basic` |
+| openEO execution | Synchronous `download()` only; checker warns when the estimate exceeds that back-end's `max_sync_bytes` |
 | EDH auth | Token in YAML, sent as a basic-auth `Authorization` header (`edh:<token>`) via fsspec `storage_options`, never embedded in a URL (aiohttp drops the header on cross-origin redirects) |
 | Local driver | Zarr, NetCDF, GeoTIFF/COG |
 | Output file name | `{target_dir}/{driver}_{dataset-slug}_{geohash}_{start}_{end}_{hash8}.nc` (`static` instead of dates; `hash8` from variables + options) |
@@ -50,7 +61,8 @@ All drivers are now verified end to end. M6 (docs) partly done in README.
 
 ```
 cubesip.example.yaml     config template (copy to cubesip.yaml, git-ignored)
-examples/                request JSON examples (S2 NDVI, Landsat via STAC, ERA5, local static)
+examples/                request JSON examples (S2 NDVI, Terrascope NDVI via the CDSE federation,
+                         Landsat via STAC, ERA5, local static) and example scripts
 schemas/                 request.schema.json (generated, test keeps it in sync)
 scripts/export_schema.py regenerates the schema
 src/cubesip/
@@ -66,7 +78,9 @@ src/cubesip/
   drivers/base.py        Driver ABC, XarraySourceDriver (shared by local + edh)
   drivers/local.py       LocalDriver
   drivers/edh.py         EarthDataHubDriver
-  drivers/openeo.py      OpenEODriver (load_collection + load_stac)
+  drivers/openeo.py      OpenEOBackendDriver (shared openEO machinery), OpenEODriver,
+                         CDSEFederationDriver (load_collection)
+  drivers/stac.py        StacDriver (load_stac on the back-end named by stac.backend)
 tests/                   offline suite; test_live.py runs only with -m live
 ```
 
@@ -86,8 +100,8 @@ tests/                   offline suite; test_live.py runs only with -m live
 }
 ```
 
-`options` are driver-specific: openeo `max_cloud_cover` (mapped to `eo:cloud_cover` property
-filter for `load_stac`) and `properties`; none yet for edh/local.
+`options` are driver-specific: openeo / cdse_federation / stac `max_cloud_cover` (mapped to an
+`eo:cloud_cover` property filter for `stac`) and `properties`; none yet for edh/local.
 
 ### Config (YAML)
 
@@ -201,5 +215,8 @@ Each milestone ends with green `uv run pytest` and `uv run ruff check .`.
    create conflict copies. Keep the shared manifest on a network share or a non-synced folder.
 5. **Virtualenv under OneDrive**: `uv sync` creates `.venv` here and OneDrive will try to sync
    thousands of files. Set `UV_PROJECT_ENVIRONMENT` to a path outside OneDrive.
+8. **Back-end not in the cache key**: the manifest records the driver, not the back-end URL.
+   Pointing `openeo.url` at another back-end with the same manifest can serve a file cached
+   from the previous one (same collection id). Start a new manifest when switching back-ends.
 6. **Cache key on options**: options are compared as canonical JSON; semantically equal but
    differently written options (e.g. `60` vs `60.0`) miss the cache. Acceptable for now.

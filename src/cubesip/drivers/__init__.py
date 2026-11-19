@@ -1,4 +1,13 @@
-"""Driver registry. Drivers are imported lazily so that e.g. openeo is only loaded when used."""
+"""Driver registry. Drivers are imported lazily so that e.g. openeo is only loaded when used.
+
+driver           dataset                     data come from
+---------------  --------------------------  ------------------------------------------------
+openeo           openEO collection id        the back-end at openeo.url (default CDSE)
+cdse_federation  openEO collection id        the CDSE openEO Federation (CDSE + Terrascope)
+stac             STAC collection URL         load_stac on the back-end named by stac.backend
+edh              Earth Data Hub dataset      Earth Data Hub Zarr, read with xarray
+local            Zarr/NetCDF/GeoTIFF path    the local file system, read with xarray
+"""
 
 from __future__ import annotations
 
@@ -9,12 +18,15 @@ from cubesip.drivers.base import (
     DatasetInfo,
     DatasetNotFoundError,
     Driver,
+    EmptyResultError,
     SizeEstimate,
     XarraySourceDriver,
 )
 
 _REGISTRY = {
     "openeo": ("cubesip.drivers.openeo", "OpenEODriver"),
+    "cdse_federation": ("cubesip.drivers.openeo", "CDSEFederationDriver"),
+    "stac": ("cubesip.drivers.stac", "StacDriver"),
     "edh": ("cubesip.drivers.edh", "EarthDataHubDriver"),
     "local": ("cubesip.drivers.local", "LocalDriver"),
 }
@@ -32,6 +44,7 @@ __all__ = [
     "DatasetInfo",
     "DatasetNotFoundError",
     "Driver",
+    "EmptyResultError",
     "SizeEstimate",
     "XarraySourceDriver",
     "get_driver",

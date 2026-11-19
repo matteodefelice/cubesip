@@ -81,7 +81,7 @@ def check(request: Request, config: Config, driver: Driver | None = None) -> Che
     driver = driver or get_driver(request.driver, config)
     report = CheckReport(request=request)
     try:
-        driver.validate_options(request)
+        driver.validate(request)
     except ValueError as exc:
         report.error = str(exc)
         return report

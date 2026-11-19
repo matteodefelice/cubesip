@@ -5,6 +5,13 @@
 # CSV manifest shared by all requests (one row per variable per file).
 manifest: ./data/manifest.csv
 
+# --- openEO back-ends -------------------------------------------------------------------
+# Drivers:
+#   openeo           collections of the back-end below (any listed on https://hub.openeo.org)
+#   cdse_federation  collections of the CDSE openEO Federation (CDSE + Terrascope)
+#   stac             any STAC collection URL, loaded with load_stac on the back-end
+#                    named in stac.backend
+
 openeo:
   url: https://openeo.dataspace.copernicus.eu
   auth:
@@ -21,6 +28,19 @@ openeo:
   # (batch jobs are out of scope for now).
   max_sync_bytes: 500000000
 
+cdse_federation:
+  # Same CDSE account, but the federation has its own login client: the first download asks
+  # for a device-code login once, even when the openeo section is already logged in.
+  url: https://openeofed.dataspace.copernicus.eu
+  auth:
+    method: oidc
+  max_sync_bytes: 500000000
+
+stac:
+  # openEO back-end that runs load_stac: openeo or cdse_federation
+  backend: openeo
+
+# --- Earth Data Hub ------------------------------------------------------------------------
 earthdatahub:
   url: https://data.earthdatahub.destine.eu
   # Personal access token from your Earth Data Hub account (https://earthdatahub.destine.eu)

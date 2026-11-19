@@ -1,0 +1,9 @@
+{
+  "driver": "cdse_federation",
+  "dataset": "TERRASCOPE_S2_NDVI_V2",
+  "variables": ["NDVI", "SCL"],
+  "geohash": "u094v8",
+  "time": {"start": "2024-06-01", "end": "2024-06-30"},
+  "target_dir": "./data",
+  "options": {"max_cloud_cover": 60}
+}

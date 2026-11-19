@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from cubesip import geohash as gh
 
-DriverName = Literal["openeo", "edh", "local"]
+DriverName = Literal["openeo", "cdse_federation", "stac", "edh", "local"]
 
 
 class TimeRange(BaseModel):
@@ -48,12 +48,15 @@ class Request(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     driver: DriverName = Field(
-        description="Data source: 'openeo' (collections or STAC via load_stac), "
+        description="Data source: 'openeo' (collections of the openEO back-end in the "
+        "config, default CDSE), 'cdse_federation' (collections of the CDSE openEO Federation: "
+        "CDSE + Terrascope), 'stac' (any STAC collection, loaded with openEO load_stac), "
         "'edh' (Earth Data Hub Zarr), 'local' (Zarr/NetCDF/GeoTIFF on disk)."
     )
     dataset: str = Field(
         min_length=1,
-        description="openeo: collection id (e.g. SENTINEL2_L2A) or STAC collection URL; "
+        description="openeo / cdse_federation: collection id (e.g. SENTINEL2_L2A); "
+        "stac: STAC collection URL; "
         "edh: dataset path (e.g. era5/era5-single-levels-atmosphere-v0) or full URL; "
         "local: path to the store/file.",
     )
@@ -67,7 +70,8 @@ class Request(BaseModel):
     target_dir: Path = Field(description="Local directory where the NetCDF output is written.")
     options: dict[str, Any] = Field(
         default_factory=dict,
-        description="Driver-specific extras, e.g. {'max_cloud_cover': 60} for openeo.",
+        description="Driver-specific extras, e.g. {'max_cloud_cover': 60} for openeo, "
+        "cdse_federation and stac.",
     )
 
     @field_validator("geohash")

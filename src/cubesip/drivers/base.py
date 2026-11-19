@@ -1,4 +1,4 @@
-"""Driver interface shared by openeo / edh / local."""
+"""Driver interface shared by every driver (openeo, cdse_federation, stac, edh, local)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,10 @@ from cubesip.request import Request
 
 class DatasetNotFoundError(LookupError):
     """The dataset does not exist on the source (or is not accessible with these credentials)."""
+
+
+class EmptyResultError(LookupError):
+    """The source answered without error but returned no data (nothing is written)."""
 
 
 @dataclass
@@ -48,7 +52,8 @@ class Driver(ABC):
         """Normalised dataset identifier stored in the manifest and used for cache matching."""
         return dataset.strip()
 
-    def validate_options(self, request: Request) -> None:
+    def validate(self, request: Request) -> None:
+        """Reject a request this driver cannot serve (wrong kind of dataset, unknown options)."""
         unknown = sorted(set(request.options) - self.supported_options)
         if unknown:
             allowed = sorted(self.supported_options) or "none"
