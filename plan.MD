@@ -4,7 +4,7 @@ The target user is an analyst or researcher who needs a quick and smart way to r
 
 # HIGH-LEVEL WORKFLOW
 The user requests (calling a Python function for now):
-- a specific dataset on one of the available drivers (openEO, CDSE openEO Federation, arbitrary STAC, EarthDataHub or local filesystem)
+- a specific dataset on one of the available drivers (openEO, CDSE openEO Federation, arbitrary STAC, EarthDataHub, TESSERA embeddings or local filesystem)
 - the set of bands / variables that are needed
 - an area using geohash (for example `qem7`)
 - a time slice between two days (it can also be NULL if the dataset does not have a temporal dimension)
@@ -47,6 +47,8 @@ Five drivers, each with one meaning for `dataset`:
 - `stac`: arbitrary STAC collections (for example https://planetarycomputer.microsoft.com/api/stac/v1/collections/landsat-c2-l2), loaded using `load_stac` on an openEO back-end (`openeo` or `cdse_federation`)
 
 Earth Data Hub can be used to access ERA5 or other datasets in the catalogue https://earthdatahub.destine.eu/catalogue
+
+The `tessera` driver gives access to the TESSERA foundation-model embeddings (https://github.com/ucam-eo/tessera), annual 128-channel embeddings at 10 m, read with the Zarr API of geotessera (https://github.com/ucam-eo/geotessera)
 
 The `local` driver can be used to access a Zarr store existent in the given path or any other spatial format. 
 

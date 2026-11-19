@@ -6,6 +6,7 @@ openeo           openEO collection id        the back-end at openeo.url (default
 cdse_federation  openEO collection id        the CDSE openEO Federation (CDSE + Terrascope)
 stac             STAC collection URL         load_stac on the back-end named by stac.backend
 edh              Earth Data Hub dataset      Earth Data Hub Zarr, read with xarray
+tessera          TESSERA store version       TESSERA embeddings Zarr, read with geotessera
 local            Zarr/NetCDF/GeoTIFF path    the local file system, read with xarray
 """
 
@@ -28,6 +29,7 @@ _REGISTRY = {
     "cdse_federation": ("cubesip.drivers.openeo", "CDSEFederationDriver"),
     "stac": ("cubesip.drivers.stac", "StacDriver"),
     "edh": ("cubesip.drivers.edh", "EarthDataHubDriver"),
+    "tessera": ("cubesip.drivers.tessera", "TesseraDriver"),
     "local": ("cubesip.drivers.local", "LocalDriver"),
 }
 

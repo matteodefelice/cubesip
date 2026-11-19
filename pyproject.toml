@@ -27,6 +27,11 @@ dependencies = [
     "pystac-client>=0.8",
 ]
 
+[project.optional-dependencies]
+tessera = [
+    "geotessera>=0.11.0 ; python_full_version >= '3.12'",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

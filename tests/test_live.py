@@ -116,3 +116,26 @@ def test_cdse_federation_download(config, tmp_path: Path) -> None:
     result = cubesip.run(request, _isolated(config, tmp_path))
     assert "NDVI" in result.dataset.data_vars
     assert int(result.dataset["NDVI"].notnull().sum()) > 0
+
+
+def test_tessera_embeddings(config, tmp_path: Path) -> None:
+    """Public TESSERA v1.1 store: no credentials needed."""
+    pytest.importorskip("geotessera")
+    cfg = _isolated(config, tmp_path)
+    request = {
+        "driver": "tessera",
+        "dataset": "v1.1",
+        "variables": ["embedding"],
+        "geohash": "u094v8",
+        "time": {"start": "2024-01-01", "end": "2024-12-31"},
+        "target_dir": str(tmp_path),
+    }
+    report = cubesip.check(request, cfg)
+    assert report.ok, report.summary()
+    result = cubesip.run(request, cfg)
+    emb = result.dataset["embedding"]
+    assert emb.sizes["band"] == 128 and emb.sizes["time"] == 1
+    assert int(emb.isel(band=0).notnull().sum()) > 0
+    assert result.manifest_rows[0]["crs"] == "EPSG:32631"
+    child = {**request, "geohash": "u094v8k"}
+    assert cubesip.run(child, cfg).from_cache

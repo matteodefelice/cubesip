@@ -1,0 +1,8 @@
+{
+  "driver": "tessera",
+  "dataset": "v1.1",
+  "variables": ["embedding"],
+  "geohash": "u094v8",
+  "time": {"start": "2024-01-01", "end": "2024-12-31"},
+  "target_dir": "./data"
+}
