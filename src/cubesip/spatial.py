@@ -37,6 +37,10 @@ class CubeDims(NamedTuple):
 def _match_dim(
     ds: xr.Dataset, axis: str, standard_names: tuple[str, ...], names: tuple[str, ...]
 ) -> str | None:
+    """Find which dimension of the dataset is the given axis (time, y or x). The labels in the
+    coordinates' metadata are trusted first; then usual names such as 'lat' or 'time' are tried.
+    Returns None if nothing matches.
+    """
     dims = list(ds.dims)
     for dim in dims:  # CF metadata first
         if dim in ds.coords:
@@ -53,7 +57,9 @@ def _match_dim(
 
 
 def find_dims(ds: xr.Dataset) -> CubeDims:
-    """Identify time / y / x dimension names (CF attributes first, then common names)."""
+    """Work out the names of the time, y and x dimensions of a dataset. Raises ValueError if x or y
+    cannot be found; time may be missing (None).
+    """
     time = _match_dim(ds, "T", ("time",), TIME_NAMES)
     y = _match_dim(ds, "Y", ("latitude", "projection_y_coordinate"), Y_NAMES)
     x = _match_dim(ds, "X", ("longitude", "projection_x_coordinate"), X_NAMES)
@@ -63,7 +69,9 @@ def find_dims(ds: xr.Dataset) -> CubeDims:
 
 
 def native_crs(ds: xr.Dataset) -> str:
-    """CRS of the dataset as 'EPSG:xxxx' (or WKT); EPSG:4326 for plain lat/lon grids."""
+    """Work out the dataset's coordinate reference system, e.g. 'EPSG:32632'. When no CRS is
+    recorded but the coordinates are named latitude/longitude, plain lat/lon (EPSG:4326) is assumed.
+    """
     crs = _crs_from_metadata(ds)
     if crs is None:
         dims = find_dims(ds)
@@ -75,7 +83,9 @@ def native_crs(ds: xr.Dataset) -> str:
 
 
 def _crs_from_metadata(ds: xr.Dataset) -> CRS | None:
-    """CRS from a CF grid-mapping variable (``spatial_ref``, ``crs``...), if any."""
+    """Look for the CRS in the dataset's metadata: the 'grid mapping' variable that CF-style files
+    use, such as 'spatial_ref' or 'crs'. Returns None if there is none.
+    """
     candidates: list[str] = []
     for var in ds.data_vars.values():
         gm = var.encoding.get("grid_mapping") or var.attrs.get("grid_mapping")
@@ -95,7 +105,9 @@ def _crs_from_metadata(ds: xr.Dataset) -> CRS | None:
 
 
 def grid_mapping_names(ds: xr.Dataset, variables: list[str] | None = None) -> set[str]:
-    """Names of grid-mapping variables referenced by ``variables`` (default: all data vars)."""
+    """Names of the helper variables that only hold CRS information, for the given variables (all
+    data variables by default).
+    """
     names = set()
     for name in variables if variables is not None else list(ds.data_vars):
         var = ds[name]
@@ -106,13 +118,17 @@ def grid_mapping_names(ds: xr.Dataset, variables: list[str] | None = None) -> se
 
 
 def data_variables(ds: xr.Dataset) -> list[str]:
-    """Data variables that are actual data (grid-mapping variables excluded)."""
+    """Names of the variables that hold real data, leaving out the helper variables that only hold
+    CRS information.
+    """
     skip = grid_mapping_names(ds)
     return [str(name) for name in ds.data_vars if name not in skip]
 
 
 def to_native_bounds(box: BBox, crs: str) -> BBox:
-    """Envelope of the (densified) EPSG:4326 box transformed into ``crs``."""
+    """Convert a lon/lat box into the dataset's own coordinates. Several points along each edge are
+    converted, so the result is a rectangle that fully encloses the converted shape.
+    """
     target = CRS.from_user_input(crs)
     if target.is_geographic:
         return box
@@ -124,7 +140,11 @@ def to_native_bounds(box: BBox, crs: str) -> BBox:
 def _cell_indices(
     values: np.ndarray, lo: float, hi: float, periodic: bool = False
 ) -> slice | np.ndarray:
-    """Indices of cells (centred on ``values``) that intersect [lo, hi] with positive area."""
+    """Find which grid cells along one axis overlap the range [lo, hi]. Each value is taken as the
+    centre of a cell, so a cell is kept as soon as part of it falls inside the range. For
+    longitudes, values shifted by 360 degrees are tried too. Returns a slice when the cells are side
+    by side, otherwise their positions.
+    """
     if values.size == 1:
         return slice(None)
     half = float(np.median(np.abs(np.diff(values)))) / 2
@@ -149,7 +169,8 @@ def subset(
     time: TimeRange | None,
     variables: list[str],
 ) -> xr.Dataset:
-    """Lazily select variables, intersecting cells and days (end day inclusive).
+    """Cut a dataset down to the requested variables, the cells that touch the box and the requested
+    days (the last day included). Nothing is loaded yet: the data are read only when they are used.
 
     With ``time=None`` every time step is kept; a time range on a dataset without a time
     dimension is an error.

@@ -19,7 +19,9 @@ class BBox(NamedTuple):
 
 
 def validate(geohash: str) -> str:
-    """Return the normalised (stripped, lower-case) geohash or raise ValueError."""
+    """Clean up a geohash (trim spaces, lower case) and check that it is valid: the right length and
+    only allowed characters. Raises ValueError otherwise.
+    """
     value = geohash.strip().lower()
     if not 1 <= len(value) <= MAX_LENGTH:
         raise ValueError(f"geohash must have 1-{MAX_LENGTH} characters, got {value!r}")
@@ -30,7 +32,9 @@ def validate(geohash: str) -> str:
 
 
 def bbox(geohash: str) -> BBox:
-    """Exact bounds of a geohash cell in EPSG:4326."""
+    """Work out the edges of a geohash cell in degrees. Each character narrows the area down,
+    splitting longitude and latitude in half in turn.
+    """
     lon = [-180.0, 180.0]
     lat = [-90.0, 90.0]
     is_lon = True  # bits alternate, starting with longitude
@@ -48,7 +52,9 @@ def bbox(geohash: str) -> BBox:
 
 
 def encode(lat: float, lon: float, precision: int = 6) -> str:
-    """Geohash of the cell containing a point (handy to find the cell of a site)."""
+    """Find the geohash, of the given length, of the cell that contains a point. Handy to find the
+    cell of a site.
+    """
     if not -90 <= lat <= 90 or not -180 <= lon <= 180:
         raise ValueError(f"invalid coordinates lat={lat}, lon={lon}")
     if not 1 <= precision <= MAX_LENGTH:
@@ -78,7 +84,8 @@ def encode(lat: float, lon: float, precision: int = 6) -> str:
 
 
 def containing(box: BBox, max_precision: int = MAX_LENGTH) -> str:
-    """Smallest cell containing ``box`` (cell edges included), at most ``max_precision`` long.
+    """Find the smallest geohash cell that fully contains a box, using at most ``max_precision``
+    characters.
 
     A box lying on a cell's edge belongs to that cell, so the box of a cell gives the cell
     back, and a point gives the same cell as :func:`encode`. Raises ValueError when no cell
@@ -122,12 +129,16 @@ def containing(box: BBox, max_precision: int = MAX_LENGTH) -> str:
 
 
 def ancestors(geohash: str, include_self: bool = True) -> list[str]:
-    """Cells containing ``geohash``, longest prefix first: 'qem7' -> ['qem7', 'qem', 'qe', 'q']."""
+    """List the cells that contain a geohash, from the cell itself (unless ``include_self`` is
+    False) up to the largest one: 'qem7' gives ['qem7', 'qem', 'qe', 'q'].
+    """
     value = validate(geohash)
     start = len(value) if include_self else len(value) - 1
     return [value[:n] for n in range(start, 0, -1)]
 
 
 def covers(parent: str, child: str) -> bool:
-    """True if cell ``parent`` contains cell ``child`` (prefix rule; a cell covers itself)."""
+    """True if the cell ``parent`` contains the cell ``child``. A geohash contains another when the
+    other starts with it, so a cell also contains itself.
+    """
     return validate(child).startswith(validate(parent))

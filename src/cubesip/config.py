@@ -66,7 +66,10 @@ class Config(_Section):
 
 
 def find_config(path: str | Path | None = None) -> Path:
-    """Resolve the config file: explicit path, then $CUBESIP_CONFIG, then default locations."""
+    """Find the config file to use. A path given here wins; otherwise the CUBESIP_CONFIG environment
+    variable; otherwise cubesip.yaml in the current folder, then in ~/.config/cubesip. Raises
+    FileNotFoundError if none exists.
+    """
     if path is not None:
         candidates = [Path(path)]
     elif os.environ.get(ENV_VAR):
@@ -83,7 +86,9 @@ def find_config(path: str | Path | None = None) -> Path:
 
 
 def load_config(path: str | Path | None = None) -> Config:
-    """Load and validate the YAML config. Relative manifest paths resolve against the file."""
+    """Read the YAML config file, check that it is valid and return it as a Config. A relative
+    manifest path is taken relative to the folder of the config file.
+    """
     config_path = find_config(path)
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     # Empty strings in the template mean "not set".
@@ -96,6 +101,9 @@ def load_config(path: str | Path | None = None) -> Config:
 
 
 def _drop_empty(node: object) -> None:
+    """Remove settings left as empty strings (as in the template), so they count as 'not set' and
+    get their default values. Nested sections are cleaned too.
+    """
     if isinstance(node, dict):
         for key in [k for k, v in node.items() if v == ""]:
             del node[key]

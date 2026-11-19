@@ -63,6 +63,7 @@ _OPS: dict[str, Callable[[Any, Any], Any]] = {
 
 
 def is_url(dataset: str) -> bool:
+    """True if the dataset is a web address (starts with http:// or https://)."""
     return dataset.strip().startswith(("http://", "https://"))
 
 
@@ -78,6 +79,9 @@ class OpenEOBackendDriver(Driver):
     config_section: ClassVar[str]
 
     def __init__(self, config) -> None:
+        """Set up the driver. The connection, the login and the metadata come later, only when
+        needed.
+        """
         super().__init__(config)
         self._connection = None
         self._authenticated = False
@@ -85,29 +89,35 @@ class OpenEOBackendDriver(Driver):
 
     @property
     def section(self) -> str:
-        """Config section of the back-end the requests run on."""
+        """Name of the config section describing the back-end the requests run on."""
         return self.config_section
 
     @property
     def backend(self) -> OpenEOConfig:
+        """Settings of the back-end used by this driver."""
         return getattr(self.config, self.section)
 
     @property
     def backend_url(self) -> str:
+        """The back-end address, without a trailing '/'."""
         return self.backend.url.rstrip("/")
 
     @property
     def max_request_bytes(self) -> int | None:
+        """Largest download this back-end allows in one go (from the config); the check warns above
+        it.
+        """
         return self.backend.max_sync_bytes
 
     def validate(self, request: Request) -> None:
+        """Do the usual checks, and also check that the 'properties' filters are well formed."""
         super().validate(request)
         property_filters(request.options)  # raises ValueError on malformed filters
 
     # -- connection -------------------------------------------------------------------
 
     def connection(self, authenticate: bool = False):
-        """Connect to the back-end; log in with the configured method when needed."""
+        """Connect to the back-end (once, then reuse the connection) and log in if needed."""
         import openeo
 
         if self._connection is None:
@@ -118,6 +128,9 @@ class OpenEOBackendDriver(Driver):
         return self._connection
 
     def _authenticate(self, connection) -> None:
+        """Log in to the back-end with the method chosen in the config: browser login (oidc), client
+        id and secret, or user name and password.
+        """
         auth = self.backend.auth
         if auth.method == "oidc":
             # stored refresh token, else device-code flow (prints a URL to open once);
@@ -142,25 +155,31 @@ class OpenEOBackendDriver(Driver):
 
     @abstractmethod
     def _read_metadata(self, dataset_key: str) -> dict:
-        """Collection metadata; raise DatasetNotFoundError if the dataset does not exist."""
+        """Read the dataset description; raise DatasetNotFoundError if it does not exist."""
 
     @abstractmethod
     def search_target(self, meta: dict, dataset_key: str) -> tuple[str, str] | None:
-        """(STAC API root, collection id) where acquisition dates can be counted."""
+        """Where acquisition dates can be counted: a STAC API address and collection id (None if
+        unknown).
+        """
 
     @abstractmethod
     def load(self, request: Request):
-        """Build the (lazy) openEO DataCube for the request."""
+        """Prepare, without running it, the openEO job that loads the requested data."""
 
     # -- metadata ---------------------------------------------------------------------
 
     def metadata(self, request: Request) -> dict:
+        """Get the dataset description, reading it only the first time and reusing it afterwards."""
         key = self.dataset_key(request.dataset)
         if key not in self._metadata:
             self._metadata[key] = self._read_metadata(key)
         return self._metadata[key]
 
     def describe(self, request: Request) -> DatasetInfo:
+        """Report which bands the dataset has, which requested ones are missing, and its CRS when it
+        has a single one.
+        """
         meta = self.metadata(request)
         bands = available_bands(meta)
         info = DatasetInfo(
@@ -176,6 +195,10 @@ class OpenEOBackendDriver(Driver):
     # -- size -------------------------------------------------------------------------
 
     def estimate_size(self, request: Request) -> SizeEstimate:
+        """Estimate the download size: the number of pixels in the area (from the resolution) times
+        the number of bands times the number of dates, at 4 bytes per value. When the dates cannot
+        be counted, one per day is assumed, which gives an upper bound.
+        """
         meta = self.metadata(request)
         res = resolution_m(meta, request.variables)
         if res is None:
@@ -199,6 +222,10 @@ class OpenEOBackendDriver(Driver):
         return SizeEstimate(nbytes=nbytes, method="estimate", detail=detail)
 
     def _count_time_steps(self, request: Request, meta: dict) -> int | None:
+        """Count the distinct acquisition dates in the area and period by searching the STAC
+        catalogue, skipping images that are too cloudy. Returns None when this is not possible; it
+        never makes the check fail.
+        """
         target = self.search_target(meta, self.dataset_key(request.dataset))
         if target is None or request.time is None:
             return None
@@ -230,6 +257,9 @@ class OpenEOBackendDriver(Driver):
     # -- fetch ------------------------------------------------------------------------
 
     def fetch(self, request: Request, out_path: Path) -> Path:
+        """Run the job on the back-end and download the result as NetCDF. Raises EmptyResultError if
+        the back-end sends back an empty file (e.g. every image was cloudy).
+        """
         cube = self.load(request)
         log.info("openEO synchronous download from %s -> %s", self.backend.url, out_path)
         cube.download(out_path, format="netCDF")
@@ -252,6 +282,7 @@ class OpenEODriver(OpenEOBackendDriver):
     config_section = "openeo"
 
     def validate(self, request: Request) -> None:
+        """Refuse a URL (that belongs to the stac driver), then do the usual checks."""
         if is_url(request.dataset):
             raise ValueError(
                 f"the {self.name} driver takes a collection id (e.g. SENTINEL2_L2A), not a URL; "
@@ -260,6 +291,9 @@ class OpenEODriver(OpenEOBackendDriver):
         super().validate(request)
 
     def _read_metadata(self, dataset_key: str) -> dict:
+        """Ask the back-end for the collection description; a missing collection raises
+        DatasetNotFoundError.
+        """
         from openeo.rest import OpenEoApiError
 
         try:
@@ -272,9 +306,15 @@ class OpenEODriver(OpenEOBackendDriver):
             raise
 
     def search_target(self, meta: dict, dataset_key: str) -> tuple[str, str] | None:
+        """To count acquisition dates, use the STAC collection that the openEO collection says it
+        comes from.
+        """
         return derived_from_target(meta)
 
     def load(self, request: Request):
+        """Prepare, without running it, the openEO job that loads the collection for the request's
+        area, dates and bands, with the cloud-cover and property filters.
+        """
         connection = self.connection(authenticate=True)
         filters = property_filters(request.options)
         return connection.load_collection(
@@ -298,23 +338,31 @@ class CDSEFederationDriver(OpenEODriver):
 
 
 def spatial_extent(request: Request) -> dict:
+    """The geohash box in the form openEO expects (west, south, east, north, in lon/lat)."""
     box = request.bbox
     return {"west": box.west, "south": box.south, "east": box.east, "north": box.north, "crs": 4326}
 
 
 def temporal_extent(request: Request) -> list[str] | None:
+    """The dates in the form openEO expects: [first day, day after the last day], because openEO
+    leaves the end date out. None for data without time.
+    """
     if request.time is None:
         return None
     return [request.time.start.isoformat(), request.time.end_exclusive.isoformat()]
 
 
 def predicate(op: str, value: Any) -> Callable[[Any], Any]:
+    """Make a small test function: e.g. predicate('lte', 50) checks that a value is at most 50."""
     func = _OPS[op]
     return lambda x: func(x, value)
 
 
 def property_filters(options: dict) -> dict[str, Callable[[Any], Any]]:
-    """``{"eo:cloud_cover": {"lte": 50}}`` -> ``{"eo:cloud_cover": lambda x: x <= 50}``."""
+    """Turn the 'properties' option into test functions openEO can use: e.g. ``{'eo:cloud_cover':
+    {'lte': 50}}`` becomes a check that cloud cover is at most 50. Raises ValueError if the option
+    is malformed.
+    """
     raw = options.get("properties") or {}
     if not isinstance(raw, dict):
         raise ValueError("options.properties must be an object {property: {op: value}}")
@@ -332,10 +380,13 @@ def property_filters(options: dict) -> dict[str, Callable[[Any], Any]]:
 
 
 def available_bands(meta: dict) -> list[str] | None:
-    """Band names from cube:dimensions, item_assets and eo:bands/bands summaries."""
+    """List the band names found anywhere in the dataset description (cube dimensions, item assets,
+    band summaries), without repeats. Returns None if none are listed.
+    """
     names: list[str] = []
 
     def add(values) -> None:
+        """Add names to the list, skipping empty and repeated ones."""
         for value in values or []:
             if value and value not in names:
                 names.append(str(value))
@@ -351,7 +402,9 @@ def available_bands(meta: dict) -> list[str] | None:
 
 
 def resolution_m(meta: dict, bands: list[str]) -> float | None:
-    """Finest ground sampling distance (m) among the requested bands."""
+    """Find the pixel size in metres of the finest requested band, from the dataset description.
+    Sizes given in degrees are roughly converted to metres. Returns None if no size is listed.
+    """
     found: list[float] = []
     summaries = meta.get("summaries") or {}
     for key in ("eo:bands", "bands"):
@@ -379,7 +432,7 @@ def resolution_m(meta: dict, bands: list[str]) -> float | None:
 
 
 def box_size_m(request: Request) -> tuple[float, float]:
-    """Width/height (m) of the geohash box in the local UTM zone."""
+    """Width and height in metres of the geohash box, measured in the local UTM zone."""
     box = request.bbox
     lon = (box.west + box.east) / 2
     lat = (box.south + box.north) / 2
@@ -390,7 +443,9 @@ def box_size_m(request: Request) -> tuple[float, float]:
 
 
 def fetch_stac_collection(url: str) -> dict:
-    """GET a STAC collection document; DatasetNotFoundError if it is missing or not one."""
+    """Download a STAC collection description from a URL. Raises DatasetNotFoundError if it is
+    missing or is not a collection.
+    """
     import requests
 
     response = requests.get(url, timeout=60)
@@ -404,7 +459,8 @@ def fetch_stac_collection(url: str) -> dict:
 
 
 def derived_from_target(meta: dict) -> tuple[str, str] | None:
-    """For an openEO collection: the STAC collection it links to as ``derived_from``.
+    """For an openEO collection: find the STAC collection it says it comes from (its 'derived_from'
+    link) and return that STAC API address and collection id.
 
     The openEO collection's own ``root`` link points at the openEO API, not a STAC API, so
     the root is taken from the ``derived_from`` URL instead.
@@ -419,7 +475,9 @@ def derived_from_target(meta: dict) -> tuple[str, str] | None:
 
 
 def stac_search_target(meta: dict, collection_url: str) -> tuple[str, str] | None:
-    """For a STAC collection document: its API root (``root`` link) and its id."""
+    """For a STAC collection description: its STAC API address (the 'root' link, or guessed from the
+    URL) and its id. Returns None if either is missing.
+    """
     roots = [link.get("href") for link in meta.get("links") or [] if link.get("rel") == "root"]
     root = roots[0] if roots and roots[0] else collection_url.split("/collections/")[0]
     collection_id = meta.get("id")
@@ -429,6 +487,7 @@ def stac_search_target(meta: dict, collection_url: str) -> tuple[str, str] | Non
 
 
 def _single_epsg(meta: dict) -> str | None:
+    """The dataset's CRS as 'EPSG:xxxx' when the description lists exactly one, else None."""
     epsg = (meta.get("summaries") or {}).get("proj:epsg")
     if isinstance(epsg, list) and len(epsg) == 1:
         epsg = epsg[0]

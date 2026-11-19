@@ -21,9 +21,14 @@ class LocalDriver(XarraySourceDriver):
     name = "local"
 
     def dataset_key(self, dataset: str) -> str:
+        """Give the dataset as a full, absolute path, so the same file always has the same name."""
         return Path(dataset.strip()).expanduser().resolve().as_posix()
 
     def _open(self, dataset_key: str) -> xr.Dataset:
+        """Open a local file or folder: a folder as a Zarr store, a .tif/.tiff file as a GeoTIFF,
+        anything else (NetCDF...) with xarray. Raises DatasetNotFoundError if the path does not
+        exist.
+        """
         path = Path(dataset_key)
         if not path.exists():
             raise DatasetNotFoundError(f"local dataset not found: {path}")
@@ -35,7 +40,10 @@ class LocalDriver(XarraySourceDriver):
 
 
 def open_geotiff(path: Path) -> xr.Dataset:
-    """Open a (multi-band) GeoTIFF as a Dataset with one variable per band."""
+    """Open a GeoTIFF, possibly with several bands, as a Dataset with one variable per band. Bands
+    are named from their descriptions when these are present and all different, otherwise band_1,
+    band_2...
+    """
     import rioxarray
 
     da = rioxarray.open_rasterio(path, chunks=True, mask_and_scale=True)

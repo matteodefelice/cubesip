@@ -36,12 +36,17 @@ class StacDriver(OpenEOBackendDriver):
 
     @property
     def section(self) -> str:
+        """Config section of the openEO back-end that runs the request (set by stac.backend)."""
         return self.config.stac.backend
 
     def dataset_key(self, dataset: str) -> str:
+        """Give the STAC collection URL in a standard form (no spaces, no trailing '/')."""
         return dataset.strip().rstrip("/")
 
     def validate(self, request: Request) -> None:
+        """Refuse a dataset that is not a URL (that belongs to the openeo drivers), then do the
+        usual checks.
+        """
         if not is_url(request.dataset):
             raise ValueError(
                 f"the stac driver takes a STAC collection URL, got {request.dataset!r}; "
@@ -50,12 +55,19 @@ class StacDriver(OpenEOBackendDriver):
         super().validate(request)
 
     def _read_metadata(self, dataset_key: str) -> dict:
+        """Download the STAC collection description."""
         return fetch_stac_collection(dataset_key)
 
     def search_target(self, meta: dict, dataset_key: str) -> tuple[str, str] | None:
+        """Where to search the collection's items to count acquisition dates: its STAC API and
+        collection id.
+        """
         return stac_search_target(meta, dataset_key)
 
     def load(self, request: Request):
+        """Prepare, without running it, the openEO job that loads the STAC collection for the
+        request's area, dates and bands, with a cloud-cover filter if one is asked for.
+        """
         connection = self.connection(authenticate=True)
         filters = property_filters(request.options)
         max_cc = request.options.get("max_cloud_cover")

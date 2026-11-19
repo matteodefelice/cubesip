@@ -29,16 +29,20 @@ class TimeRange(BaseModel):
 
     @model_validator(mode="after")
     def _check_order(self) -> TimeRange:
+        """Refuse a time range whose last day comes before its first day."""
         if self.end < self.start:
             raise ValueError(f"time.end ({self.end}) is before time.start ({self.start})")
         return self
 
     @property
     def end_exclusive(self) -> date:
-        """The day after ``end``, for APIs whose upper bound is exclusive (openEO, slicing)."""
+        """The day after the last day. Some tools leave the end of a range out, so this is the end
+        they need.
+        """
         return self.end + timedelta(days=1)
 
     def covers(self, other: TimeRange) -> bool:
+        """True if this time range includes every day of the other one."""
         return self.start <= other.start and self.end >= other.end
 
 
@@ -79,11 +83,13 @@ class Request(BaseModel):
     @field_validator("geohash")
     @classmethod
     def _valid_geohash(cls, value: str) -> str:
+        """Check that the geohash is well formed, and store it in lower case without spaces."""
         return gh.validate(value)
 
     @field_validator("variables")
     @classmethod
     def _unique_variables(cls, value: list[str]) -> list[str]:
+        """Refuse a request that lists the same variable more than once."""
         dupes = sorted({v for v in value if value.count(v) > 1})
         if dupes:
             raise ValueError(f"duplicate variables: {dupes}")
@@ -91,17 +97,19 @@ class Request(BaseModel):
 
     @property
     def bbox(self) -> gh.BBox:
-        """Geohash cell bounds in EPSG:4326."""
+        """The edges of the geohash cell, in longitude and latitude degrees."""
         return gh.bbox(self.geohash)
 
     @property
     def options_key(self) -> str:
-        """Canonical JSON of ``options`` (sorted keys), used for cache matching."""
+        """The options written as text with the keys in a fixed order, so the same options always
+        give the same text. Used to match a request with cached files.
+        """
         return canonical_json(self.options)
 
     @classmethod
     def from_json(cls, source: str | Path | dict[str, Any]) -> Request:
-        """Build a request from a dict, a JSON string, or a path to a JSON file."""
+        """Build a request from a dict, a JSON string, or the path to a JSON file."""
         if isinstance(source, dict):
             return cls.model_validate(source)
         if isinstance(source, str) and source.lstrip().startswith("{"):
@@ -110,11 +118,14 @@ class Request(BaseModel):
 
 
 def canonical_json(value: Any) -> str:
+    """Write a value as compact JSON with sorted keys, so the same content always gives exactly the
+    same text.
+    """
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def request_json_schema() -> dict[str, Any]:
-    """JSON schema of the request document (kept in sync with schemas/request.schema.json)."""
+    """Describe what a valid request looks like, as a JSON schema."""
     schema = Request.model_json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     schema["title"] = "cubesip request"
@@ -122,6 +133,6 @@ def request_json_schema() -> dict[str, Any]:
 
 
 def write_request_json_schema(path: str | Path) -> None:
-    """Regenerate the committed schema file (see scripts/export_schema.py)."""
+    """Save the request JSON schema to a file (used to refresh schemas/request.schema.json)."""
     text = json.dumps(request_json_schema(), indent=2) + "\n"
     Path(path).write_text(text, encoding="utf-8", newline="\n")

@@ -17,7 +17,9 @@ _KEEP_ENCODING = ("grid_mapping", "coordinates")
 
 
 def dataset_slug(dataset_key: str) -> str:
-    """Short file-name friendly label for a dataset (last path segment, no extension)."""
+    """Make a short label for a dataset that is safe in a file name: the last part of its path,
+    without extension, with unusual characters replaced by '-'.
+    """
     segment = [part for part in re.split(r"[/\\]", dataset_key) if part][-1:] or ["dataset"]
     stem = re.sub(r"\.(zarr|nc|nc4|netcdf|tif|tiff)$", "", segment[0], flags=re.IGNORECASE)
     slug = re.sub(r"[^A-Za-z0-9-]+", "-", stem).strip("-")
@@ -25,7 +27,8 @@ def dataset_slug(dataset_key: str) -> str:
 
 
 def output_path(request: Request, dataset_key: str, backend: str = "") -> Path:
-    """``{target_dir}/{driver}_{slug}_{geohash}_{start}-{end}_{hash8}.nc``.
+    """Choose where to save the NetCDF file of a request, inside the request's target folder. The
+    file name looks like ``{driver}_{slug}_{geohash}_{start}-{end}_{hash8}.nc``.
 
     ``hash8`` covers dataset, variables, options and back-end, so the same request sent to
     two back-ends gives two files instead of one overwriting the other.
@@ -47,6 +50,9 @@ def output_path(request: Request, dataset_key: str, backend: str = "") -> Path:
 
 
 def provenance_attrs(request: Request, dataset_key: str, backend: str = "") -> dict[str, str]:
+    """Build the metadata stored inside the NetCDF file to record where it came from: cubesip
+    version, driver, dataset, back-end, geohash, options and dates.
+    """
     from cubesip import __version__
 
     attrs = {
@@ -65,7 +71,8 @@ def provenance_attrs(request: Request, dataset_key: str, backend: str = "") -> d
 
 
 def write_netcdf(ds: xr.Dataset, path: Path, attrs: dict[str, str] | None = None) -> Path:
-    """Write a (lazy) dataset to NetCDF4 with compression.
+    """Save a dataset to a compressed NetCDF file, adding the given metadata and a line to its
+    history.
 
     Source encodings (zarr compressors, chunking, scale factors) are dropped so any input
     store can be written; attributes netCDF cannot hold are converted to strings.
@@ -92,11 +99,16 @@ def write_netcdf(ds: xr.Dataset, path: Path, attrs: dict[str, str] | None = None
 
 
 def open_netcdf(path: Path) -> xr.Dataset:
-    """Open a cubesip NetCDF lazily, with grid-mapping variables decoded as coordinates."""
+    """Open a NetCDF file written by cubesip without loading its data into memory yet. The CRS
+    information is recognised as a coordinate.
+    """
     return xr.open_dataset(path, engine="netcdf4", chunks={}, decode_coords="all")
 
 
 def _sanitize_attrs(attrs: dict) -> dict:
+    """Make metadata safe to store in NetCDF: drop empty values, turn True/False into 1/0, keep
+    numbers, text and lists of numbers, and turn anything else into JSON text.
+    """
     clean = {}
     for key, value in attrs.items():
         if value is None:

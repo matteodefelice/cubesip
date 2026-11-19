@@ -38,7 +38,7 @@ _WARP_LOCK = threading.Lock()
 
 
 def containing_geohash(wkt: str, max_precision: int = geohash.MAX_LENGTH) -> str:
-    """Smallest geohash cell that fully contains a geometry given as WKT.
+    """Find the smallest geohash cell that fully contains a shape given as WKT text.
 
     The WKT is in EPSG:4326 with longitude first (``POLYGON ((lon lat, ...))``). The cell
     contains the geometry's bounding box, edges included, so a polygon traced along a cell's
@@ -81,7 +81,7 @@ def regrid(
     *,
     method: str = "nearest",
 ) -> xr.Dataset | xr.DataArray | list[xr.Dataset | xr.DataArray]:
-    """Resample one or more results onto the grid of ``reference``.
+    """Put one or more datasets on the same grid (same CRS and cells) as a reference dataset.
 
     ``sources`` and ``reference`` are :class:`cubesip.Result` objects, Datasets or
     DataArrays, in any CRS cubesip knows (a CF grid mapping, or plain lat/lon). One source
@@ -112,6 +112,9 @@ def regrid(
 
 
 def _resampling(method: str) -> Resampling:
+    """Turn a method name such as 'nearest' or 'average' into the matching rasterio setting, with a
+    clear error if the name is unknown.
+    """
     try:
         return Resampling[method]
     except KeyError:
@@ -120,6 +123,9 @@ def _resampling(method: str) -> Resampling:
 
 
 def _to_dataset(obj: Gridded) -> xr.Dataset:
+    """Get a Dataset out of a Result, Dataset or DataArray. A DataArray is wrapped in a Dataset
+    under a temporary name.
+    """
     if isinstance(obj, Result):
         return obj.dataset
     if isinstance(obj, xr.DataArray):
@@ -130,6 +136,7 @@ def _to_dataset(obj: Gridded) -> xr.Dataset:
 
 
 def _regrid_one(source: Gridded, grid: _Grid, resampling: Resampling) -> xr.Dataset | xr.DataArray:
+    """Regrid one source and give it back in the form it came in (a DataArray stays a DataArray)."""
     out = _regrid_dataset(_to_dataset(source), grid, resampling)
     if isinstance(source, xr.DataArray):
         return out[_UNNAMED].rename(source.name)
@@ -137,13 +144,18 @@ def _regrid_one(source: Gridded, grid: _Grid, resampling: Resampling) -> xr.Data
 
 
 def _grid_mapping_vars(ds: xr.Dataset) -> set[str]:
-    """Grid-mapping variables: referenced by a data variable, or the usual scalar names."""
+    """Names of the variables that only hold CRS information: those the data variables point to,
+    plus 'spatial_ref' or 'crs' when present.
+    """
     names = spatial.grid_mapping_names(ds)
     names |= {n for n in ("spatial_ref", "crs") if n in ds.variables and ds[n].ndim == 0}
     return names
 
 
 def _x_values(ds: xr.Dataset, x: str, crs: str) -> np.ndarray:
+    """The x coordinates as numbers. For lon/lat data, longitudes written as 0..360 are converted to
+    -180..180.
+    """
     values = np.asarray(ds[x].values, dtype=float)
     if CRS.from_user_input(crs).is_geographic:  # 0..360 longitudes -> -180..180
         values = (values + 180) % 360 - 180
@@ -151,7 +163,10 @@ def _x_values(ds: xr.Dataset, x: str, crs: str) -> np.ndarray:
 
 
 def _sort_axis(values: np.ndarray, name: str, descending: bool) -> tuple[np.ndarray, float | None]:
-    """Order that sorts ``values`` and their even spacing (None for a single value)."""
+    """Work out how to put an axis in order (ascending or descending) and the distance between
+    neighbouring cells. Raises ValueError if the cells are not evenly spaced; the distance is None
+    when there is a single cell.
+    """
     order = np.argsort(values, kind="stable")
     if descending:
         order = order[::-1]
@@ -166,13 +181,18 @@ def _sort_axis(values: np.ndarray, name: str, descending: bool) -> tuple[np.ndar
 
 
 def _inverse(order: np.ndarray) -> np.ndarray | None:
-    """Permutation undoing ``order``; None when ``order`` changes nothing."""
+    """The reordering that puts things back as they were. Returns None when the order changes
+    nothing.
+    """
     if np.array_equal(order, np.arange(order.size)):
         return None
     return np.argsort(order)
 
 
 def _reference_grid(ds: xr.Dataset) -> _Grid:
+    """Describe the grid of the reference dataset: its CRS, where its cells are and how big they
+    are, its dimension names and order, and the coordinates to copy onto every regridded output.
+    """
     dims = spatial.find_dims(ds)
     crs = spatial.native_crs(ds)
     x = _x_values(ds, dims.x, crs)
@@ -209,7 +229,9 @@ def _reference_grid(ds: xr.Dataset) -> _Grid:
 def _source_transform(
     x: np.ndarray, dx: float | None, y: np.ndarray, dy: float | None, crs: str, grid: _Grid
 ) -> Affine:
-    """Affine of a north-up source; a single-cell axis is stretched over the reference."""
+    """Describe where the source's cells are and how big they are. If the source has a single cell
+    along an axis, its size is unknown, so that cell is stretched to cover the whole reference grid.
+    """
     if dx is None or dy is None:
         left, top = grid.transform.c, grid.transform.f
         right = left + grid.transform.a * grid.width
@@ -225,6 +247,10 @@ def _source_transform(
 
 
 def _regrid_dataset(ds: xr.Dataset, grid: _Grid, resampling: Resampling) -> xr.Dataset:
+    """Regrid every variable of a dataset that lies on the x/y grid onto the reference grid. The
+    source is first put north-up, as the warping step expects. Variables without x/y are kept as
+    they are, and the source's own CRS information is replaced by the reference's.
+    """
     dims = spatial.find_dims(ds)
     crs = spatial.native_crs(ds)
     ds = ds.drop_vars(_grid_mapping_vars(ds))  # the output takes the reference's CRS
@@ -265,6 +291,9 @@ def _regrid_dataset(ds: xr.Dataset, grid: _Grid, resampling: Resampling) -> xr.D
 def _regrid_var(
     var: xr.DataArray, y: str, x: str, warp: Callable[[np.ndarray], np.ndarray], grid: _Grid
 ) -> xr.DataArray:
+    """Regrid one variable. It is turned into floating point (so missing cells can be NaN), and the
+    work is done block by block, lazily when the data are lazy.
+    """
     dtype = np.result_type(var.dtype, np.float32)  # float32 for float32 and <= 16-bit ints
     var = var.astype(dtype)
     if var.chunks is not None:
@@ -293,7 +322,10 @@ def _warp_block(
     grid: _Grid,
     resampling: Resampling,
 ) -> np.ndarray:
-    """Warp an array shaped (..., y, x) onto the reference grid."""
+    """Warp a block of data shaped (..., y, x) onto the reference grid with rasterio, then put rows
+    and columns in the reference's order. Cells without data become NaN. Only one warp runs at a
+    time, because rasterio is not thread-safe here.
+    """
     lead = data.shape[:-2]
     source = np.ascontiguousarray(data.reshape((-1, *data.shape[-2:])))
     dest = np.full((source.shape[0], grid.height, grid.width), np.nan, dtype=data.dtype)

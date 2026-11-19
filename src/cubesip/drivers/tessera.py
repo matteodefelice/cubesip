@@ -54,6 +54,7 @@ INSTALL_HINT = "the tessera driver needs geotessera: pip install 'cubesip[tesser
 
 
 def _require_geotessera() -> None:
+    """Check that the optional geotessera package is installed; if not, say how to install it."""
     try:
         import geotessera  # noqa: F401
     except ImportError as exc:
@@ -65,15 +66,21 @@ class TesseraDriver(Driver):
     supported_options = frozenset({"bands", "depth"})
 
     def __init__(self, config) -> None:
+        """Set up the driver with an empty memory of stores already opened."""
         super().__init__(config)
         self._stores: dict[str, Any] = {}
 
     @property
     def max_request_bytes(self) -> int | None:
+        """Size above which the check warns, since the whole cube is held in memory before it is
+        written.
+        """
         return MAX_REQUEST_BYTES
 
     def dataset_key(self, dataset: str) -> str:
-        """Store version -> store URL; a URL or existing path is kept as it is."""
+        """Turn a store version such as 'v1.1' into the store's URL. A URL or an existing local path
+        is kept as it is.
+        """
         value = dataset.strip().rstrip("/")
         if "://" in value or Path(value).expanduser().exists():
             return value
@@ -83,6 +90,10 @@ class TesseraDriver(Driver):
         return zarr_store_url(value).rstrip("/")
 
     def validate(self, request: Request) -> None:
+        """Refuse requests TESSERA cannot serve: the time must cover whole calendar years, 'bands'
+        must be a list of different channel numbers (0 or more), and 'depth' a positive whole
+        number.
+        """
         super().validate(request)
         _require_geotessera()
         time = request.time
@@ -112,7 +123,9 @@ class TesseraDriver(Driver):
     # -- store ------------------------------------------------------------------------
 
     def store(self, request: Request):
-        """GeoTesseraZarr for the request's store (opened once per driver)."""
+        """Open the TESSERA store of the request once, and reuse it afterwards. Raises
+        DatasetNotFoundError if the store does not exist.
+        """
         key = self.dataset_key(request.dataset)
         if key not in self._stores:
             from geotessera.store import GeoTesseraZarr
@@ -125,11 +138,14 @@ class TesseraDriver(Driver):
 
     @staticmethod
     def years(request: Request) -> list[int]:
+        """The calendar years covered by the request."""
         assert request.time is not None  # validate() requires it
         return list(range(request.time.start.year, request.time.end.year + 1))
 
     def channels(self, request: Request) -> list[int]:
-        """Channel indices the output will hold, checked against the store."""
+        """The embedding channels the output will hold (all of them unless 'bands' is given),
+        checked against what the store offers.
+        """
         store = self.store(request)
         depth = request.options.get("depth")
         if depth is not None and depth not in store.depths:
@@ -146,6 +162,9 @@ class TesseraDriver(Driver):
     # -- check ------------------------------------------------------------------------
 
     def describe(self, request: Request) -> DatasetInfo:
+        """Check that the store has every requested year and the requested channels, and report the
+        one available variable ('embedding') and the CRS.
+        """
         store = self.store(request)
         missing_years = [y for y in self.years(request) if y not in store.years]
         if missing_years:
@@ -161,6 +180,9 @@ class TesseraDriver(Driver):
         )
 
     def estimate_size(self, request: Request) -> SizeEstimate:
+        """Estimate the download size: the pixels in the area (10 m each) times the channels times
+        the years, at 4 bytes per value.
+        """
         box = spatial.to_native_bounds(request.bbox, zone_crs(request))
         nx = max(1, math.ceil((box.east - box.west) / PIXEL_M))
         ny = max(1, math.ceil((box.north - box.south) / PIXEL_M))
@@ -174,6 +196,10 @@ class TesseraDriver(Driver):
     # -- fetch ------------------------------------------------------------------------
 
     def fetch(self, request: Request, out_path: Path) -> Path:
+        """Read the embeddings of each year, keep the requested channels, combine them into one
+        dataset and save it as NetCDF. Raises an error if the grid differs between years, or if
+        there is no data at all (e.g. open water).
+        """
         store = self.store(request)
         channels = self.channels(request)
         depth = request.options.get("depth")
@@ -206,7 +232,7 @@ class TesseraDriver(Driver):
 
 
 def zone_crs(request: Request) -> str:
-    """CRS of the TESSERA zone holding the geohash centre.
+    """The UTM CRS of the TESSERA zone that holds the centre of the geohash cell.
 
     TESSERA zones use the northern UTM CRS everywhere (negative northings south of the
     equator), so this is always EPSG:326NN.
@@ -224,8 +250,9 @@ def embedding_dataset(
     crs: str,
     channels: list[int],
 ) -> xr.Dataset:
-    """Stack per-year ``(H, W, B)`` mosaics into a ``(time, band, y, x)`` dataset with pixel
-    centre coordinates and a CF grid mapping."""
+    """Combine the per-year embedding arrays into one dataset with dimensions (time, band, y, x),
+    pixel-centre coordinates and the CRS recorded.
+    """
     data = np.stack([np.moveaxis(m, -1, 0) for m in mosaics]).astype("float32", copy=False)
     height, width = data.shape[-2:]
     x = transform.c + transform.a * (np.arange(width) + 0.5)
