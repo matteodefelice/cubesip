@@ -49,6 +49,14 @@ is wrong.
 
 ### Examples
 
+[examples/quickstart.py](examples/quickstart.py) is the shortest start: one request for a
+month of ERA5 2 m temperature, then the result printed and plotted with xarray. It is split
+into `# %%` cells to run one at a time in VS Code, or as a whole:
+
+```bash
+uv run --group examples python examples/quickstart.py
+```
+
 Two scripts in [examples/](examples/) compute a yearly metric for one site. Both make one
 cubesip request per year, write a PNG chart and a CSV table to `data/`, and read the cached
 files instead of downloading when run again. Both default to the same cropland cell in the
