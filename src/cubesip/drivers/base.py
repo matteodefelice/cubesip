@@ -46,20 +46,26 @@ class Driver(ABC):
     supported_options: ClassVar[frozenset[str]] = frozenset()
 
     def __init__(self, config: Config) -> None:
+        """Keep the config, so the driver can read its settings and credentials."""
         self.config = config
 
     def dataset_key(self, dataset: str) -> str:
-        """Normalised dataset identifier stored in the manifest and used for cache matching."""
+        """Give the dataset name in a standard form, used in the manifest and to find cached files.
+        By default this only trims spaces.
+        """
         return dataset.strip()
 
     @property
     def backend_url(self) -> str:
-        """Service the data come from ('' for local files), stored in the manifest so that
-        a file cached from one back-end is never served for a request to another."""
+        """Address of the service the data come from (empty for local files). It is saved in the
+        manifest, so a file downloaded from one service is never reused for a request to another.
+        """
         return ""
 
     def validate(self, request: Request) -> None:
-        """Reject a request this driver cannot serve (wrong kind of dataset, unknown options)."""
+        """Refuse a request this driver cannot handle, for example one with options it does not
+        know.
+        """
         unknown = sorted(set(request.options) - self.supported_options)
         if unknown:
             allowed = sorted(self.supported_options) or "none"
@@ -69,23 +75,26 @@ class Driver(ABC):
 
     @property
     def max_request_bytes(self) -> int | None:
-        """Size above which the checker warns (None: no limit)."""
+        """Download size above which the check warns (None: no limit)."""
         return None
 
     @abstractmethod
     def describe(self, request: Request) -> DatasetInfo:
-        """Check the dataset exists and which requested variables are available.
-
-        Raises DatasetNotFoundError if the dataset itself does not exist.
+        """Check that the dataset exists and which of the requested variables it has. Raises
+        DatasetNotFoundError if the dataset does not exist.
         """
 
     @abstractmethod
     def estimate_size(self, request: Request) -> SizeEstimate:
-        """Uncompressed size of the requested cube (exact when the source allows it)."""
+        """Estimate how many bytes the requested data take once unpacked (exact when the source
+        allows it).
+        """
 
     @abstractmethod
     def fetch(self, request: Request, out_path: Path) -> Path:
-        """Retrieve the data and write a NetCDF at ``out_path`` (native CRS kept)."""
+        """Download the data and save them as a NetCDF file at ``out_path``, keeping the source's
+        own CRS.
+        """
 
 
 class XarraySourceDriver(Driver):
@@ -95,20 +104,27 @@ class XarraySourceDriver(Driver):
     """
 
     def __init__(self, config: Config) -> None:
+        """Set up the driver with an empty memory of datasets already opened."""
         super().__init__(config)
         self._opened: dict[str, xr.Dataset] = {}
 
     @abstractmethod
     def _open(self, dataset_key: str) -> xr.Dataset:
-        """Open the source lazily; raise DatasetNotFoundError if it does not exist."""
+        """Open the source without loading its data; raise DatasetNotFoundError if it does not
+        exist.
+        """
 
     def open_source(self, request: Request) -> xr.Dataset:
+        """Open the request's dataset, reusing it if this driver has already opened it."""
         key = self.dataset_key(request.dataset)
         if key not in self._opened:
             self._opened[key] = self._open(key)
         return self._opened[key]
 
     def describe(self, request: Request) -> DatasetInfo:
+        """Open the dataset and report which variables it has, which requested ones are missing, its
+        CRS, and notes such as a time dimension that the request does not limit.
+        """
         ds = self.open_source(request)
         available = spatial.data_variables(ds)
         info = DatasetInfo(
@@ -133,15 +149,18 @@ class XarraySourceDriver(Driver):
         return info
 
     def select(self, request: Request) -> xr.Dataset:
+        """Cut the dataset down to the request's variables, area and days (data not loaded yet)."""
         return spatial.subset(
             self.open_source(request), request.bbox, request.time, request.variables
         )
 
     def estimate_size(self, request: Request) -> SizeEstimate:
+        """Work out the exact size of the selected data and its length along each dimension."""
         selected = self.select(request)
         shape = ", ".join(f"{dim}={size}" for dim, size in selected.sizes.items())
         return SizeEstimate(nbytes=int(selected.nbytes), method="exact", detail=shape)
 
     def fetch(self, request: Request, out_path: Path) -> Path:
+        """Write the selected data to a NetCDF file, with metadata saying where they came from."""
         attrs = provenance_attrs(request, self.dataset_key(request.dataset), self.backend_url)
         return write_netcdf(self.select(request), out_path, attrs)

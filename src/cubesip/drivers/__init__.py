@@ -35,6 +35,9 @@ _REGISTRY = {
 
 
 def get_driver(name: str, config: Config) -> Driver:
+    """Create the driver with the given name (e.g. 'openeo' or 'local'), loading its code only now.
+    Raises ValueError for an unknown name.
+    """
     try:
         module_name, class_name = _REGISTRY[name]
     except KeyError:

@@ -25,7 +25,9 @@ class CheckReport:
 
     @property
     def ok(self) -> bool:
-        """True if run() can proceed (cache hit, or dataset found with all variables)."""
+        """True when run() can go ahead: either the data are already cached, or the dataset was
+        found and has every requested variable.
+        """
         if self.error is not None:
             return False
         if self.cache_hit is not None:
@@ -33,6 +35,9 @@ class CheckReport:
         return self.dataset is not None and not self.dataset.missing_variables
 
     def summary(self) -> str:
+        """Build a short, readable text about the check: what was asked, whether it is cached or
+        ready to download, what was found about the dataset, the expected size and any warnings.
+        """
         r = self.request
         period = f"{r.time.start} to {r.time.end}" if r.time else "static"
         lines = [
@@ -63,10 +68,12 @@ class CheckReport:
         return "\n".join(lines)
 
     def __str__(self) -> str:
+        """Printing a report shows its summary."""
         return self.summary()
 
 
 def format_bytes(nbytes: int | float) -> str:
+    """Turn a number of bytes into a readable size such as '12.3 MB' (counting in steps of 1000)."""
     value = float(nbytes)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if value < 1000 or unit == "TB":
@@ -76,8 +83,11 @@ def format_bytes(nbytes: int | float) -> str:
 
 
 def check(request: Request, config: Config, driver: Driver | None = None) -> CheckReport:
-    """1) manifest cache lookup; 2) on a miss, dataset/variables on the source;
-    3) size estimate and warnings. Nothing is downloaded."""
+    """Check a request step by step without downloading anything. First look in the manifest for a
+    file that already covers it; if there is none, ask the source whether the dataset and variables
+    exist; finally estimate how big the download would be and warn if it is too large. Problems are
+    written into the report instead of being raised.
+    """
     driver = driver or get_driver(request.driver, config)
     report = CheckReport(request=request)
     try:

@@ -57,10 +57,14 @@ class CacheHit:
 
 
 def path_to_uri(path: Path) -> str:
+    """Turn a file path into a file:// address."""
     return Path(path).resolve().as_uri()
 
 
 def uri_to_path(uri: str) -> Path:
+    """Turn a file:// address back into a file path, network shares included. Other kinds of address
+    are refused.
+    """
     parsed = urlparse(uri)
     if parsed.scheme != "file":
         raise ValueError(f"only file:// URIs are supported, got {uri!r}")
@@ -79,7 +83,9 @@ def make_rows(
     backend: str = "",
     request_id: str | None = None,
 ) -> list[dict[str, str]]:
-    """Manifest rows (one per variable) for a file that was just written."""
+    """Build the manifest rows for a file that was just written: one row per variable, each saying
+    who downloaded what, when, from where, and where the file is.
+    """
     from cubesip import __version__
 
     common = {
@@ -103,6 +109,9 @@ def make_rows(
 
 
 def _safe(func) -> str:
+    """Call a function and return its result as text, or an empty string if it fails (asking for the
+    user name can fail on some service accounts).
+    """
     try:
         return str(func())
     except Exception:  # getuser() can fail in some service accounts
@@ -111,11 +120,14 @@ def _safe(func) -> str:
 
 class Manifest:
     def __init__(self, path: Path) -> None:
+        """Point at the manifest CSV file and at the lock file that sits next to it."""
         self.path = Path(path)
         self.lock_path = self.path.with_name(self.path.name + ".lock")
 
     def read(self) -> pd.DataFrame:
-        """All rows as strings (empty frame with COLUMNS if the file does not exist yet)."""
+        """Read every row of the manifest as text. If the file does not exist yet, return an empty
+        table with the expected columns. Columns missing from older manifests are added, empty.
+        """
         if not self.path.is_file() or self.path.stat().st_size == 0:
             return pd.DataFrame({column: pd.Series(dtype=str) for column in COLUMNS})
         frame = pd.read_csv(self.path, dtype=str, keep_default_na=False)
@@ -125,7 +137,10 @@ class Manifest:
         return frame
 
     def append(self, rows: list[dict[str, str]]) -> None:
-        """Append rows under the file lock, writing the header if the file is new."""
+        """Add rows at the end of the manifest. The lock file makes sure two users or machines never
+        write at the same time. A new file gets its header line first, and a manifest from an older
+        version is upgraded to the current columns before rows are added.
+        """
         unknown = {key for row in rows for key in row} - set(COLUMNS)
         if unknown:
             raise ValueError(f"unknown manifest columns: {sorted(unknown)}")
@@ -141,12 +156,15 @@ class Manifest:
                 writer.writerows(rows)
 
     def _header(self) -> list[str]:
+        """Read the column names from the first line of the manifest."""
         with self.path.open(newline="", encoding="utf-8") as handle:
             return next(csv.reader(handle), [])
 
     def _upgrade(self) -> None:
-        """Rewrite a manifest from an older version with the current columns (call under the
-        lock). Appending to it as it is would put values under the wrong headers."""
+        """Rewrite a manifest made by an older version of cubesip so that it has the current
+        columns. Call it only while holding the lock. Without it, new rows would put values under
+        the wrong column headers.
+        """
         frame = self.read()  # adds missing columns as empty strings
         extra = [column for column in frame.columns if column not in COLUMNS]
         tmp = self.path.with_name(self.path.name + ".upgrade")
@@ -156,7 +174,8 @@ class Manifest:
     def find_covering(
         self, request: Request, dataset_key: str, backend: str = ""
     ) -> CacheHit | None:
-        """Best cached file covering the request.
+        """Find the best file already downloaded that holds everything the request asks for, or None
+        if there is none.
 
         A file covers the request when its rows have the same driver, dataset, back-end and
         options, its geohash is the request's or an ancestor, its period contains the

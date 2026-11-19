@@ -40,15 +40,17 @@ class Result:
 
 
 def check(request: RequestLike, config: ConfigLike = None) -> checker.CheckReport:
-    """Validate the request and run the checker without downloading anything."""
+    """Look at a request without downloading anything: is it already cached, does the dataset exist,
+    and roughly how big would the download be. Returns a report you can print.
+    """
     return checker.check(_as_request(request), _as_config(config))
 
 
 def run(request: RequestLike, config: ConfigLike = None, *, force: bool = False) -> Result:
-    """Execute a request.
-
-    Cache hit (unless ``force``): return a lazy view of the cached file, write nothing.
-    Otherwise: driver.fetch -> NetCDF in target_dir -> one manifest row per variable.
+    """Get the data for a request. If a file already on disk covers it (and ``force`` is False),
+    open that file and return the part that was asked for, without writing anything. Otherwise
+    download the data with the right driver, save them as a NetCDF file in the target folder, and
+    record the file in the manifest so it can be reused next time.
     """
     req = _as_request(request)
     cfg = _as_config(config)
@@ -100,8 +102,14 @@ def run(request: RequestLike, config: ConfigLike = None, *, force: bool = False)
 
 
 def _as_request(request: RequestLike) -> Request:
+    """Turn what the user passed (a Request, a dict, a JSON string or the path to a JSON file) into
+    a Request.
+    """
     return request if isinstance(request, Request) else Request.from_json(request)
 
 
 def _as_config(config: ConfigLike) -> Config:
+    """Turn what the user passed (a Config, a path, or nothing) into a loaded Config. With nothing,
+    the config file is looked up in the usual places.
+    """
     return config if isinstance(config, Config) else load_config(config)

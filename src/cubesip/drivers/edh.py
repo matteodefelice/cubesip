@@ -26,13 +26,18 @@ class EarthDataHubDriver(XarraySourceDriver):
 
     @property
     def base_url(self) -> str:
+        """The Earth Data Hub address from the config, without a trailing '/'."""
         return self.config.earthdatahub.url.rstrip("/")
 
     @property
     def backend_url(self) -> str:
+        """The service the data come from: the Earth Data Hub address."""
         return self.base_url
 
     def dataset_key(self, dataset: str) -> str:
+        """Give the dataset in a standard form: drop the hub address if it was included, and any
+        trailing '/' or '.zarr', so different ways of writing the same dataset match.
+        """
         value = dataset.strip()
         if value.startswith(self.base_url + "/"):
             value = value[len(self.base_url) + 1 :]
@@ -42,11 +47,15 @@ class EarthDataHubDriver(XarraySourceDriver):
         return value if value.startswith(("http://", "https://")) else value.strip("/")
 
     def store_url(self, dataset_key: str) -> str:
+        """Full web address of the dataset's Zarr store."""
         if dataset_key.startswith(("http://", "https://")):
             return f"{dataset_key}.zarr"
         return f"{self.base_url}/{dataset_key}.zarr"
 
     def _storage_options(self) -> dict:
+        """Build the login header from the Earth Data Hub token. Raises PermissionError if no token
+        is set in the config.
+        """
         token = self.config.earthdatahub.token
         if token is None or not token.get_secret_value():
             raise PermissionError(
@@ -57,6 +66,10 @@ class EarthDataHubDriver(XarraySourceDriver):
         return {"client_kwargs": {"headers": {"Authorization": f"Basic {credentials}"}}}
 
     def _open(self, dataset_key: str) -> xr.Dataset:
+        """Open the dataset's Zarr store over the internet, without downloading the data yet. A
+        refused login becomes a PermissionError and a missing dataset a DatasetNotFoundError, each
+        with a clear message.
+        """
         import aiohttp
 
         url = self.store_url(dataset_key)
