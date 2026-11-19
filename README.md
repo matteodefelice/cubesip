@@ -172,6 +172,50 @@ reusing files from the old one. Rows written before cubesip recorded the back-en
 empty; they are still reused, and `check()` warns that their back-end is assumed. A
 manifest from an older version gets the new `backend` column the next time a row is added.
 
+### Processing
+
+`cubesip.processing` holds helpers that work on requests and results.
+
+`containing_geohash` gives the smallest geohash cell that fully contains a geometry, given as
+WKT in EPSG:4326 (longitude first). Use it to request data for a field or a region:
+
+```python
+from cubesip.processing import containing_geohash, regrid
+
+containing_geohash("POLYGON ((-3.71 45.29, -3.69 45.29, -3.69 45.31, -3.71 45.31, -3.71 45.29))")
+# 'gbj3'
+containing_geohash("POINT (-3.7 45.3)", max_precision=6)  # a point gets a 12-character cell
+```
+
+Geohash cells nest inside 45 x 45 degree level-1 cells, so a geometry crossing the equator,
+the prime meridian or another multiple of 45 degrees is in no cell and raises `ValueError`.
+
+`regrid` resamples one or more results onto the grid of a reference result (its CRS and
+cells), with rasterio/GDAL:
+
+```python
+s2 = cubesip.run(s2_request)  # Sentinel-2 for a geohash (UTM, 10 m)
+era5 = cubesip.run(era5_request)  # ERA5 for the same geohash (lat/lon, 0.25 deg)
+tessera = cubesip.run(tessera_request)  # TESSERA embeddings (UTM, 10 m)
+
+t2m = regrid(era5, s2)  # ERA5 on the Sentinel-2 grid
+t2m, emb = regrid([era5, tessera], s2)  # a list gives a list
+```
+
+- Inputs are `Result` objects, Datasets or DataArrays; a DataArray (e.g. an NDVI you
+  computed) comes back as a DataArray.
+- `method` is a rasterio resampling name: `nearest` (default, right for classes and masks
+  such as `SCL`), `bilinear` or `cubic` to interpolate onto a finer grid, `average`, `min`,
+  `max`, `med`, `mode` or `sum` to aggregate onto a coarser one.
+- Only x/y change: time, band and other dimensions are kept as they are, not aligned with
+  the reference's.
+- Values come back as floats (integer bands are converted), NaN where the source has no
+  data. The result is lazy when the source is.
+- A source with a single cell along x or y, such as ERA5 for a level-6 geohash, has no cell
+  size, so that cell is taken to cover the whole reference. That is right when the reference
+  is for the same geohash or one inside it: cubesip only returns one cell when the request
+  area lies inside it. The reference itself needs at least two cells along x and y.
+
 ## Tests
 
 ```bash

@@ -25,6 +25,9 @@ dependencies = [
     # openEO (collections + load_stac) and STAC metadata lookups
     "openeo>=0.40",
     "pystac-client>=0.8",
+    # processing: WKT geometries and regridding
+    "shapely>=2.0",
+    "rasterio>=1.3",
 ]
 
 [project.optional-dependencies]
