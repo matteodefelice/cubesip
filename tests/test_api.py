@@ -20,6 +20,11 @@ class FakeDriver(XarraySourceDriver):
     supported_options = frozenset({"foo"})
     fetches = 0
     fail = False
+    backend = ""  # what backend_url reports; tests switch it to mimic another back-end
+
+    @property
+    def backend_url(self) -> str:
+        return FakeDriver.backend
 
     def _open(self, dataset_key: str) -> xr.Dataset:
         return era5_like()
@@ -36,6 +41,7 @@ class FakeDriver(XarraySourceDriver):
 def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
     FakeDriver.fetches = 0
     FakeDriver.fail = False
+    FakeDriver.backend = ""
     monkeypatch.setattr(api, "get_driver", lambda name, cfg: FakeDriver(cfg))
     monkeypatch.setattr(checker, "get_driver", lambda name, cfg: FakeDriver(cfg))
     return Config(manifest=tmp_path / "manifest.csv")
@@ -112,6 +118,37 @@ def test_cache_misses(config: Config, request_dict: dict, change: dict) -> None:
     cubesip.run(request_dict, config)
     report = cubesip.check({**request_dict, **change}, config)
     assert report.cache_hit is None
+
+
+def test_cache_is_per_backend(config: Config, request_dict: dict) -> None:
+    """Same request, two back-ends: two downloads, two files, each served to its own."""
+    FakeDriver.backend = "https://a.example.eu"
+    first = cubesip.run(request_dict, config)
+    assert first.manifest_rows[0]["backend"] == "https://a.example.eu"
+    assert first.dataset.attrs["cubesip_backend"] == "https://a.example.eu"
+
+    FakeDriver.backend = "https://b.example.eu"
+    assert cubesip.check(request_dict, config).cache_hit is None
+    second = cubesip.run(request_dict, config)
+    assert not second.from_cache and second.path != first.path
+    assert first.path.is_file()  # not overwritten
+    assert FakeDriver.fetches == 2
+
+    FakeDriver.backend = "https://a.example.eu"
+    again = cubesip.run(request_dict, config)
+    assert again.from_cache and again.path == first.path
+    assert FakeDriver.fetches == 2
+
+
+def test_rows_without_backend_are_still_reused(config: Config, request_dict: dict) -> None:
+    """Rows written before back-ends were recorded keep serving, with a warning."""
+    cubesip.run(request_dict, config)  # backend "" mimics an old row
+    FakeDriver.backend = "https://a.example.eu"
+    report = cubesip.check(request_dict, config)
+    assert report.cache_hit is not None and report.cache_hit.backend == ""
+    assert any("before cubesip tracked back-ends" in w for w in report.warnings)
+    assert cubesip.run(request_dict, config).from_cache
+    assert FakeDriver.fetches == 1
 
 
 def test_deleted_file_is_not_a_hit_and_force_refetches(config: Config, request_dict) -> None:

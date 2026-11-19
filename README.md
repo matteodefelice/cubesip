@@ -100,9 +100,7 @@ synchronously. A collection id given to `stac`, or a URL given to `openeo` /
 the same CDSE account but its own login client, so the first `cdse_federation` download asks
 for a device-code login once; the refresh token is then stored. When no pixel in the area
 and period is valid (e.g. a single fully cloudy scene), the federation returns an empty
-file; cubesip raises `EmptyResultError` and records nothing. The cache keys on the driver,
-not the back-end URL. After pointing `openeo.url` at a different back-end, start a new
-manifest, or a cached file from the old back-end can be returned.
+file; cubesip raises `EmptyResultError` and records nothing.
 
 ### Requests
 
@@ -123,9 +121,16 @@ Request documents follow [schemas/request.schema.json](schemas/request.schema.js
 
 Every downloaded file adds one row per variable to the CSV manifest set in `cubesip.yaml`.
 A later request is served from an existing file, without downloading, when the file has the
-same driver, dataset and options, covers the request's period and variables, and its geohash
-is the same cell or a parent cell (`qem` covers `qem7`). Outputs keep the source's native
-CRS (UTM for Sentinel-2, lat/lon for ERA5).
+same driver, dataset, back-end and options, covers the request's period and variables, and
+its geohash is the same cell or a parent cell (`qem` covers `qem7`). Outputs keep the
+source's native CRS (UTM for Sentinel-2, lat/lon for ERA5).
+
+The back-end is the service the data came from: the openEO back-end URL (`openeo.url`,
+`cdse_federation.url`, or the one `stac.backend` names) or `earthdatahub.url`; empty for
+`local`. Pointing `openeo.url` at another back-end therefore downloads again instead of
+reusing files from the old one. Rows written before cubesip recorded the back-end have it
+empty; they are still reused, and `check()` warns that their back-end is assumed. A
+manifest from an older version gets the new `backend` column the next time a row is added.
 
 ## Tests
 

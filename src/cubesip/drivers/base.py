@@ -52,6 +52,12 @@ class Driver(ABC):
         """Normalised dataset identifier stored in the manifest and used for cache matching."""
         return dataset.strip()
 
+    @property
+    def backend_url(self) -> str:
+        """Service the data come from ('' for local files), stored in the manifest so that
+        a file cached from one back-end is never served for a request to another."""
+        return ""
+
     def validate(self, request: Request) -> None:
         """Reject a request this driver cannot serve (wrong kind of dataset, unknown options)."""
         unknown = sorted(set(request.options) - self.supported_options)
@@ -137,5 +143,5 @@ class XarraySourceDriver(Driver):
         return SizeEstimate(nbytes=int(selected.nbytes), method="exact", detail=shape)
 
     def fetch(self, request: Request, out_path: Path) -> Path:
-        attrs = provenance_attrs(request, self.dataset_key(request.dataset))
+        attrs = provenance_attrs(request, self.dataset_key(request.dataset), self.backend_url)
         return write_netcdf(self.select(request), out_path, attrs)

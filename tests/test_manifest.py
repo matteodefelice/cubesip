@@ -1,3 +1,4 @@
+import csv
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,32 @@ def test_make_rows_and_append(tmp_path: Path) -> None:
     frame = manifest.read()
     assert len(frame) == 4
     assert frame.loc[0, "time_start"] == "2024-01-01"
+
+
+def test_old_manifest_is_upgraded_before_appending(tmp_path: Path) -> None:
+    """A manifest without the backend column is rewritten, so new rows line up."""
+    nc = tmp_path / "out.nc"
+    nc.write_bytes(b"x")
+    request = Request.from_json(BASE)
+    old_columns = [c for c in COLUMNS if c != "backend"]
+    old_row = make_rows(request, dataset_key="era5/x", path=nc, crs="EPSG:4326")[0]
+    del old_row["backend"]
+    manifest = Manifest(tmp_path / "manifest.csv")
+    with manifest.path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=old_columns)
+        writer.writeheader()
+        writer.writerow(old_row)
+
+    new_rows = make_rows(
+        request, dataset_key="era5/x", path=nc, crs="EPSG:4326", backend="https://edh.example"
+    )
+    manifest.append(new_rows)
+    with manifest.path.open(newline="", encoding="utf-8") as handle:
+        assert next(csv.reader(handle)) == COLUMNS
+    frame = manifest.read()
+    assert frame["backend"].tolist() == ["", "https://edh.example", "https://edh.example"]
+    assert frame["variable"].tolist() == ["t2m", "t2m", "tp"]
+    assert frame["geohash"].tolist() == ["qem7"] * 3
 
 
 def test_append_rejects_unknown_columns(tmp_path: Path) -> None:

@@ -54,7 +54,7 @@ of leaving a 0-byte file. `auth.client_id` is now passed to the oidc login (it w
 | openEO execution | Synchronous `download()` only; checker warns when the estimate exceeds that back-end's `max_sync_bytes` |
 | EDH auth | Token in YAML, sent as a basic-auth `Authorization` header (`edh:<token>`) via fsspec `storage_options`, never embedded in a URL (aiohttp drops the header on cross-origin redirects) |
 | Local driver | Zarr, NetCDF, GeoTIFF/COG |
-| Output file name | `{target_dir}/{driver}_{dataset-slug}_{geohash}_{start}_{end}_{hash8}.nc` (`static` instead of dates; `hash8` from variables + options) |
+| Output file name | `{target_dir}/{driver}_{dataset-slug}_{geohash}_{start}_{end}_{hash8}.nc` (`static` instead of dates; `hash8` from dataset, variables, options and back-end URL) |
 | Tooling | uv, Python ≥3.11 (3.12 pinned), src layout, pytest, ruff. Live tests marked `live`, skipped by default |
 
 ## 2. Layout
@@ -111,7 +111,9 @@ See `cubesip.example.yaml`. Lookup: explicit path -> `$CUBESIP_CONFIG` -> `./cub
 ### Manifest (CSV)
 
 Columns (`manifest.COLUMNS`): `request_id, timestamp_utc, user, hostname, driver, dataset,
-variable, geohash, time_start, time_end, options, crs, file_size_bytes, uri, cubesip_version`.
+backend, variable, geohash, time_start, time_end, options, crs, file_size_bytes, uri,
+cubesip_version`. `backend` is `Driver.backend_url` (openEO back-end or EDH URL, empty for
+local); an older manifest is rewritten with the new header before the next append.
 `user` = `getpass.getuser()`, `hostname` = `socket.gethostname()`, `uri` = `file:///...`.
 
 ### Checker / cache rules
@@ -120,6 +122,7 @@ variable, geohash, time_start, time_end, options, crs, file_size_bytes, uri, cub
 
 1. **Cache lookup** in the manifest. A file covers the request when, for the rows sharing a `uri`:
    - same `driver`, `dataset` and canonical `options` JSON;
+   - same `backend` (rows with an empty `backend`, written before it existed, match any);
    - row `geohash` is the request geohash or one of its ancestors (prefix rule);
    - time: both null, or `time_start <= start` and `time_end >= end`;
    - every requested variable is present;
@@ -215,8 +218,8 @@ Each milestone ends with green `uv run pytest` and `uv run ruff check .`.
    create conflict copies. Keep the shared manifest on a network share or a non-synced folder.
 5. **Virtualenv under OneDrive**: `uv sync` creates `.venv` here and OneDrive will try to sync
    thousands of files. Set `UV_PROJECT_ENVIRONMENT` to a path outside OneDrive.
-8. **Back-end not in the cache key**: the manifest records the driver, not the back-end URL.
-   Pointing `openeo.url` at another back-end with the same manifest can serve a file cached
-   from the previous one (same collection id). Start a new manifest when switching back-ends.
+8. ~~**Back-end not in the cache key**~~ Fixed (2026-11-19): the manifest has a `backend`
+   column (`Driver.backend_url`) and a cached file is reused only for the same back-end.
+   Rows from before have it empty and still match any back-end (`check()` warns).
 6. **Cache key on options**: options are compared as canonical JSON; semantically equal but
    differently written options (e.g. `60` vs `60.0`) miss the cache. Acceptable for now.

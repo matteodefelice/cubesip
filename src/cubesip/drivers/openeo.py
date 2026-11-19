@@ -93,6 +93,10 @@ class OpenEOBackendDriver(Driver):
         return getattr(self.config, self.section)
 
     @property
+    def backend_url(self) -> str:
+        return self.backend.url.rstrip("/")
+
+    @property
     def max_request_bytes(self) -> int | None:
         return self.backend.max_sync_bytes
 

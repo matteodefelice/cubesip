@@ -28,6 +28,10 @@ class EarthDataHubDriver(XarraySourceDriver):
     def base_url(self) -> str:
         return self.config.earthdatahub.url.rstrip("/")
 
+    @property
+    def backend_url(self) -> str:
+        return self.base_url
+
     def dataset_key(self, dataset: str) -> str:
         value = dataset.strip()
         if value.startswith(self.base_url + "/"):
