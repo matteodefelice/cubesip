@@ -1,7 +1,17 @@
-"""openEO driver: back-end collections (load_collection) and arbitrary STAC (load_stac).
+"""openEO drivers: collections of an openEO back-end, and the machinery they share.
 
-- dataset starting with http(s):// -> ``connection.load_stac(url, ...)``
-- otherwise                        -> ``connection.load_collection(collection_id, ...)``
+- ``openeo``: the collections of ONE openEO back-end, the one set by ``openeo.url`` in the
+  config. Any back-end listed on https://hub.openeo.org works; the default is the Copernicus
+  Data Space Ecosystem (https://openeo.dataspace.copernicus.eu).
+- ``cdse_federation``: the collections of the CDSE openEO Federation
+  (https://openeofed.dataspace.copernicus.eu), which routes each request to CDSE or
+  Terrascope and so also offers e.g. ``AGERA5`` and ``TERRASCOPE_S2_NDVI_V2``. Same CDSE
+  account, its own ``cdse_federation`` config section.
+
+For both, ``dataset`` is a collection id (``SENTINEL2_L2A``) read with ``load_collection``; a
+STAC collection URL is refused and belongs to the ``stac`` driver (``drivers/stac.py``), which
+reuses the :class:`OpenEOBackendDriver` base with ``load_stac``.
+
 - spatial_extent: geohash box as {"west", "south", "east", "north", "crs": 4326}
 - temporal_extent: [start, end + 1 day] (openEO end bound is exclusive)
 - options:
@@ -11,8 +21,8 @@
 - synchronous ``cube.download(out_path, format="netCDF")`` only (batch jobs: future work)
 
 Collection metadata (bands, resolution) is public and read without logging in; the size
-estimate counts acquisition dates with a STAC item search (the collection itself for
-load_stac, the STAC collection an openEO collection links to as ``derived_from``).
+estimate counts acquisition dates with a STAC item search (the STAC collection an openEO
+collection links to as ``derived_from``, or the collection itself for load_stac).
 
 Docs: https://open-eo.github.io/openeo-python-client/
 """
@@ -22,11 +32,19 @@ from __future__ import annotations
 import logging
 import math
 import operator
+from abc import abstractmethod
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
-from cubesip.drivers.base import DatasetInfo, DatasetNotFoundError, Driver, SizeEstimate
+from cubesip.config import OpenEOConfig
+from cubesip.drivers.base import (
+    DatasetInfo,
+    DatasetNotFoundError,
+    Driver,
+    EmptyResultError,
+    SizeEstimate,
+)
 from cubesip.request import Request
 from cubesip.spatial import to_native_bounds
 
@@ -45,12 +63,19 @@ _OPS: dict[str, Callable[[Any, Any], Any]] = {
 
 
 def is_url(dataset: str) -> bool:
-    return dataset.startswith(("http://", "https://"))
+    return dataset.strip().startswith(("http://", "https://"))
 
 
-class OpenEODriver(Driver):
-    name = "openeo"
+class OpenEOBackendDriver(Driver):
+    """Shared by the drivers that run on an openEO back-end: connection and login, metadata
+    cache, size estimate and synchronous download.
+
+    Subclasses say which config section holds the back-end (``config_section``), how to read
+    the dataset's metadata and how to build the cube.
+    """
+
     supported_options = frozenset({"max_cloud_cover", "properties"})
+    config_section: ClassVar[str]
 
     def __init__(self, config) -> None:
         super().__init__(config)
@@ -59,38 +84,46 @@ class OpenEODriver(Driver):
         self._metadata: dict[str, dict] = {}
 
     @property
+    def section(self) -> str:
+        """Config section of the back-end the requests run on."""
+        return self.config_section
+
+    @property
+    def backend(self) -> OpenEOConfig:
+        return getattr(self.config, self.section)
+
+    @property
     def max_request_bytes(self) -> int | None:
-        return self.config.openeo.max_sync_bytes
+        return self.backend.max_sync_bytes
 
-    def dataset_key(self, dataset: str) -> str:
-        value = dataset.strip()
-        return value.rstrip("/") if is_url(value) else value
-
-    def validate_options(self, request: Request) -> None:
-        super().validate_options(request)
+    def validate(self, request: Request) -> None:
+        super().validate(request)
         property_filters(request.options)  # raises ValueError on malformed filters
 
     # -- connection -------------------------------------------------------------------
 
     def connection(self, authenticate: bool = False):
-        """Connect to ``openeo.url``; log in with the configured method when needed."""
+        """Connect to the back-end; log in with the configured method when needed."""
         import openeo
 
         if self._connection is None:
-            self._connection = openeo.connect(self.config.openeo.url)
+            self._connection = openeo.connect(self.backend.url)
         if authenticate and not self._authenticated:
             self._authenticate(self._connection)
             self._authenticated = True
         return self._connection
 
     def _authenticate(self, connection) -> None:
-        auth = self.config.openeo.auth
+        auth = self.backend.auth
         if auth.method == "oidc":
-            # stored refresh token, else device-code flow (prints a URL to open once)
-            connection.authenticate_oidc(provider_id=auth.provider_id)
+            # stored refresh token, else device-code flow (prints a URL to open once);
+            # client_id None: the back-end's default client
+            connection.authenticate_oidc(provider_id=auth.provider_id, client_id=auth.client_id)
         elif auth.method == "client_credentials":
             if not auth.client_id or auth.client_secret is None:
-                raise PermissionError("openeo.auth: client_credentials needs client_id/secret")
+                raise PermissionError(
+                    f"{self.section}.auth: client_credentials needs client_id/secret"
+                )
             connection.authenticate_oidc_client_credentials(
                 client_id=auth.client_id,
                 client_secret=auth.client_secret.get_secret_value(),
@@ -98,42 +131,30 @@ class OpenEODriver(Driver):
             )
         else:
             if not auth.username or auth.password is None:
-                raise PermissionError("openeo.auth: basic needs username and password")
+                raise PermissionError(f"{self.section}.auth: basic needs username and password")
             connection.authenticate_basic(auth.username, auth.password.get_secret_value())
+
+    # -- per-driver hooks -------------------------------------------------------------
+
+    @abstractmethod
+    def _read_metadata(self, dataset_key: str) -> dict:
+        """Collection metadata; raise DatasetNotFoundError if the dataset does not exist."""
+
+    @abstractmethod
+    def search_target(self, meta: dict, dataset_key: str) -> tuple[str, str] | None:
+        """(STAC API root, collection id) where acquisition dates can be counted."""
+
+    @abstractmethod
+    def load(self, request: Request):
+        """Build the (lazy) openEO DataCube for the request."""
 
     # -- metadata ---------------------------------------------------------------------
 
     def metadata(self, request: Request) -> dict:
-        """Collection description (openEO) or STAC collection JSON (load_stac)."""
         key = self.dataset_key(request.dataset)
         if key not in self._metadata:
-            self._metadata[key] = self._fetch_stac(key) if is_url(key) else self._describe(key)
+            self._metadata[key] = self._read_metadata(key)
         return self._metadata[key]
-
-    def _describe(self, collection_id: str) -> dict:
-        from openeo.rest import OpenEoApiError
-
-        try:
-            return self.connection().describe_collection(collection_id)
-        except OpenEoApiError as exc:
-            if exc.http_status_code == 404 or exc.code == "CollectionNotFound":
-                raise DatasetNotFoundError(
-                    f"openEO collection {collection_id!r} not found on {self.config.openeo.url}"
-                ) from None
-            raise
-
-    @staticmethod
-    def _fetch_stac(url: str) -> dict:
-        import requests
-
-        response = requests.get(url, timeout=60)
-        if response.status_code == 404:
-            raise DatasetNotFoundError(f"STAC collection not found: {url}")
-        response.raise_for_status()
-        meta = response.json()
-        if meta.get("type") != "Collection":
-            raise DatasetNotFoundError(f"{url} is not a STAC collection (type={meta.get('type')})")
-        return meta
 
     def describe(self, request: Request) -> DatasetInfo:
         meta = self.metadata(request)
@@ -174,7 +195,7 @@ class OpenEODriver(Driver):
         return SizeEstimate(nbytes=nbytes, method="estimate", detail=detail)
 
     def _count_time_steps(self, request: Request, meta: dict) -> int | None:
-        target = stac_search_target(meta, self.dataset_key(request.dataset))
+        target = self.search_target(meta, self.dataset_key(request.dataset))
         if target is None or request.time is None:
             return None
         root, collection_id = target
@@ -204,33 +225,69 @@ class OpenEODriver(Driver):
 
     # -- fetch ------------------------------------------------------------------------
 
-    def load(self, request: Request):
-        """Build the (lazy) openEO DataCube for the request."""
-        key = self.dataset_key(request.dataset)
-        connection = self.connection(authenticate=True)
-        common = {
-            "spatial_extent": spatial_extent(request),
-            "temporal_extent": temporal_extent(request),
-            "bands": list(request.variables),
-        }
-        filters = property_filters(request.options)
-        if is_url(key):
-            max_cc = request.options.get("max_cloud_cover")
-            if max_cc is not None:
-                filters.setdefault("eo:cloud_cover", _predicate("lte", max_cc))
-            return connection.load_stac(key, properties=filters or None, **common)
-        return connection.load_collection(
-            key,
-            max_cloud_cover=request.options.get("max_cloud_cover"),
-            properties=filters or None,
-            **common,
-        )
-
     def fetch(self, request: Request, out_path: Path) -> Path:
         cube = self.load(request)
-        log.info("openEO synchronous download -> %s", out_path)
+        log.info("openEO synchronous download from %s -> %s", self.backend.url, out_path)
         cube.download(out_path, format="netCDF")
-        return Path(out_path)
+        out_path = Path(out_path)
+        if not out_path.is_file() or out_path.stat().st_size == 0:
+            # Seen on the CDSE federation (Terrascope collections): HTTP 200 with an empty
+            # body when no pixel in the area and period is valid, e.g. one fully cloudy scene.
+            raise EmptyResultError(
+                f"{self.backend.url} returned an empty result for {request.dataset} "
+                f"{request.variables} @ {request.geohash}: probably no valid pixels in this "
+                "area and period (all cloudy or no acquisitions); try a longer period"
+            )
+        return out_path
+
+
+class OpenEODriver(OpenEOBackendDriver):
+    """Collections of the openEO back-end set by ``openeo.url`` (default: CDSE)."""
+
+    name = "openeo"
+    config_section = "openeo"
+
+    def validate(self, request: Request) -> None:
+        if is_url(request.dataset):
+            raise ValueError(
+                f"the {self.name} driver takes a collection id (e.g. SENTINEL2_L2A), not a URL; "
+                "use the 'stac' driver for a STAC collection URL"
+            )
+        super().validate(request)
+
+    def _read_metadata(self, dataset_key: str) -> dict:
+        from openeo.rest import OpenEoApiError
+
+        try:
+            return self.connection().describe_collection(dataset_key)
+        except OpenEoApiError as exc:
+            if exc.http_status_code == 404 or exc.code == "CollectionNotFound":
+                raise DatasetNotFoundError(
+                    f"openEO collection {dataset_key!r} not found on {self.backend.url}"
+                ) from None
+            raise
+
+    def search_target(self, meta: dict, dataset_key: str) -> tuple[str, str] | None:
+        return derived_from_target(meta)
+
+    def load(self, request: Request):
+        connection = self.connection(authenticate=True)
+        filters = property_filters(request.options)
+        return connection.load_collection(
+            self.dataset_key(request.dataset),
+            spatial_extent=spatial_extent(request),
+            temporal_extent=temporal_extent(request),
+            bands=list(request.variables),
+            max_cloud_cover=request.options.get("max_cloud_cover"),
+            properties=filters or None,
+        )
+
+
+class CDSEFederationDriver(OpenEODriver):
+    """Collections of the CDSE openEO Federation (CDSE + Terrascope)."""
+
+    name = "cdse_federation"
+    config_section = "cdse_federation"
 
 
 # -- helpers (pure, unit tested) ----------------------------------------------------------
@@ -247,7 +304,7 @@ def temporal_extent(request: Request) -> list[str] | None:
     return [request.time.start.isoformat(), request.time.end_exclusive.isoformat()]
 
 
-def _predicate(op: str, value: Any) -> Callable[[Any], Any]:
+def predicate(op: str, value: Any) -> Callable[[Any], Any]:
     func = _OPS[op]
     return lambda x: func(x, value)
 
@@ -266,7 +323,7 @@ def property_filters(options: dict) -> dict[str, Callable[[Any], Any]]:
         ((op, value),) = condition.items()
         if op not in _OPS:
             raise ValueError(f"unknown operator {op!r} for {prop!r}; use one of {sorted(_OPS)}")
-        filters[prop] = _predicate(op, value)
+        filters[prop] = predicate(op, value)
     return filters
 
 
@@ -328,21 +385,40 @@ def box_size_m(request: Request) -> tuple[float, float]:
     return native.east - native.west, native.north - native.south
 
 
-def stac_search_target(meta: dict, dataset_key: str) -> tuple[str, str] | None:
-    """(STAC API root, collection id) where acquisition dates can be counted."""
+def fetch_stac_collection(url: str) -> dict:
+    """GET a STAC collection document; DatasetNotFoundError if it is missing or not one."""
+    import requests
+
+    response = requests.get(url, timeout=60)
+    if response.status_code == 404:
+        raise DatasetNotFoundError(f"STAC collection not found: {url}")
+    response.raise_for_status()
+    meta = response.json()
+    if meta.get("type") != "Collection":
+        raise DatasetNotFoundError(f"{url} is not a STAC collection (type={meta.get('type')})")
+    return meta
+
+
+def derived_from_target(meta: dict) -> tuple[str, str] | None:
+    """For an openEO collection: the STAC collection it links to as ``derived_from``.
+
+    The openEO collection's own ``root`` link points at the openEO API, not a STAC API, so
+    the root is taken from the ``derived_from`` URL instead.
+    """
     links = meta.get("links") or []
-    if is_url(dataset_key):
-        collection_url, collection_id = dataset_key, meta.get("id")
-    else:
-        derived = [link.get("href") for link in links if link.get("rel") == "derived_from"]
-        stac = [h for h in derived if h and "/collections/" in h]
-        if not stac:
-            return None
-        collection_url = stac[0].rstrip("/")
-        collection_id = collection_url.rsplit("/", 1)[-1]
-        links = []  # the openEO links point at the openEO API, not the STAC API
-    roots = [link.get("href") for link in links if link.get("rel") == "root"]
+    derived = [link.get("href") for link in links if link.get("rel") == "derived_from"]
+    stac = [href for href in derived if href and "/collections/" in href]
+    if not stac:
+        return None
+    root, collection_id = stac[0].rstrip("/").rsplit("/collections/", 1)
+    return root.rstrip("/"), collection_id
+
+
+def stac_search_target(meta: dict, collection_url: str) -> tuple[str, str] | None:
+    """For a STAC collection document: its API root (``root`` link) and its id."""
+    roots = [link.get("href") for link in meta.get("links") or [] if link.get("rel") == "root"]
     root = roots[0] if roots and roots[0] else collection_url.split("/collections/")[0]
+    collection_id = meta.get("id")
     if not collection_id or not root:
         return None
     return root.rstrip("/"), str(collection_id)

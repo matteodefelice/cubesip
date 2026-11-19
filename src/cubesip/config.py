@@ -1,4 +1,4 @@
-"""YAML configuration: credentials for openEO / Earth Data Hub and the manifest location.
+"""YAML configuration: credentials for the openEO back-ends / Earth Data Hub and the manifest.
 
 The real file (``cubesip.yaml``) is git-ignored; ``cubesip.example.yaml`` is the template.
 Secrets are held as ``SecretStr`` so they never show up in reprs, logs or tracebacks.
@@ -33,10 +33,21 @@ class OpenEOAuth(_Section):
     password: SecretStr | None = None
 
 
+CDSE_URL = "https://openeo.dataspace.copernicus.eu"
+CDSE_FEDERATION_URL = "https://openeofed.dataspace.copernicus.eu"
+
+
 class OpenEOConfig(_Section):
-    url: str = "https://openeo.dataspace.copernicus.eu"
+    """One openEO back-end: where it is, how to log in, the synchronous download limit."""
+
+    url: str = CDSE_URL
     auth: OpenEOAuth = Field(default_factory=OpenEOAuth)
     max_sync_bytes: int = 500_000_000
+
+
+class StacConfig(_Section):
+    # Config section of the openEO back-end that runs load_stac for the stac driver.
+    backend: Literal["openeo", "cdse_federation"] = "openeo"
 
 
 class EarthDataHubConfig(_Section):
@@ -47,6 +58,10 @@ class EarthDataHubConfig(_Section):
 class Config(_Section):
     manifest: Path
     openeo: OpenEOConfig = Field(default_factory=OpenEOConfig)
+    cdse_federation: OpenEOConfig = Field(
+        default_factory=lambda: OpenEOConfig(url=CDSE_FEDERATION_URL)
+    )
+    stac: StacConfig = Field(default_factory=StacConfig)
     earthdatahub: EarthDataHubConfig = Field(default_factory=EarthDataHubConfig)
 
 
@@ -72,7 +87,7 @@ def load_config(path: str | Path | None = None) -> Config:
     config_path = find_config(path)
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     # Empty strings in the template mean "not set".
-    for section in ("openeo", "earthdatahub"):
+    for section in ("openeo", "cdse_federation", "stac", "earthdatahub"):
         _drop_empty(raw.get(section))
     config = Config.model_validate(raw)
     if not config.manifest.is_absolute():

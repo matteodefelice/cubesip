@@ -53,7 +53,7 @@ def run(request: RequestLike, config: ConfigLike = None, *, force: bool = False)
     req = _as_request(request)
     cfg = _as_config(config)
     driver = get_driver(req.driver, cfg)
-    driver.validate_options(req)
+    driver.validate(req)
     key = driver.dataset_key(req.dataset)
     manifest = Manifest(cfg.manifest)
 

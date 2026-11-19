@@ -1,8 +1,9 @@
 # cubesip
 
 Retrieve remote sensing and climate data for a site or region, addressed by a
-[geohash](https://en.wikipedia.org/wiki/Geohash), from openEO, Earth Data Hub or local
-Zarr/NetCDF/GeoTIFF, with a shared CSV manifest that avoids downloading the same data twice.
+[geohash](https://en.wikipedia.org/wiki/Geohash), from openEO back-ends, any STAC catalogue,
+Earth Data Hub or local Zarr/NetCDF/GeoTIFF, with a shared CSV manifest that avoids
+downloading the same data twice.
 
 See [plan.MD](plan.MD) for the goals and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for
 the design decisions and milestone status.
@@ -81,6 +82,28 @@ uv run --group examples python examples/precip_p90_yearly.py
 uv run --group examples python examples/precip_p90_yearly.py --years 1995 2024 --percentile 95
 ```
 
+### Drivers
+
+A request names one driver: it decides what `dataset` means and where the data come from.
+
+| Driver | `dataset` | Data come from | Config section |
+|---|---|---|---|
+| `openeo` | openEO collection id, e.g. `SENTINEL2_L2A` | the openEO back-end at `openeo.url`: any back-end listed on the [openEO Hub](https://hub.openeo.org); default Copernicus Data Space Ecosystem (CDSE) | `openeo` |
+| `cdse_federation` | openEO collection id, e.g. `TERRASCOPE_S2_NDVI_V2`, `AGERA5` | the [CDSE openEO Federation](https://documentation.dataspace.copernicus.eu/APIs/openEO/federation/openeo_federation.html) (`openeofed.dataspace.copernicus.eu`), which routes each request to CDSE or Terrascope, so it has the CDSE collections plus Terrascope's | `cdse_federation` |
+| `stac` | STAC collection URL, e.g. Planetary Computer `.../collections/landsat-c2-l2` | any STAC catalogue, read by openEO `load_stac` on the back-end named in `stac.backend` (`openeo` or `cdse_federation`) | `stac` |
+| `edh` | Earth Data Hub dataset path, e.g. `era5/era5-single-levels-atmosphere-v0` | Earth Data Hub Zarr, streamed with xarray | `earthdatahub` |
+| `local` | path to a Zarr store, NetCDF or GeoTIFF | the local file system, read with xarray | none |
+
+The three openEO-based drivers log in with their section's `auth` and download
+synchronously. A collection id given to `stac`, or a URL given to `openeo` /
+`cdse_federation`, is refused with a message naming the right driver. The federation uses
+the same CDSE account but its own login client, so the first `cdse_federation` download asks
+for a device-code login once; the refresh token is then stored. When no pixel in the area
+and period is valid (e.g. a single fully cloudy scene), the federation returns an empty
+file; cubesip raises `EmptyResultError` and records nothing. The cache keys on the driver,
+not the back-end URL. After pointing `openeo.url` at a different back-end, start a new
+manifest, or a cached file from the old back-end can be returned.
+
 ### Requests
 
 Request documents follow [schemas/request.schema.json](schemas/request.schema.json); see
@@ -88,13 +111,13 @@ Request documents follow [schemas/request.schema.json](schemas/request.schema.js
 
 | Field | Meaning |
 |---|---|
-| `driver` | `openeo`, `edh` (Earth Data Hub) or `local` |
-| `dataset` | openEO collection id or STAC collection URL; EDH dataset path (`era5/era5-single-levels-atmosphere-v0`); local path |
+| `driver` | `openeo`, `cdse_federation`, `stac`, `edh` or `local` (see [Drivers](#drivers)) |
+| `dataset` | openEO collection id (`openeo`, `cdse_federation`); STAC collection URL (`stac`); EDH dataset path (`era5/era5-single-levels-atmosphere-v0`); local path |
 | `variables` | bands / variables to retrieve |
 | `geohash` | area of interest (the geohash cell) |
 | `time` | `{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}`, both days included; `null` for static data |
 | `target_dir` | where the NetCDF is written |
-| `options` | openEO only: `max_cloud_cover`, `properties` (`{"platform": {"eq": "landsat-9"}}`, operators `eq neq lt lte gt gte`) |
+| `options` | `openeo`, `cdse_federation`, `stac` only: `max_cloud_cover`, `properties` (`{"platform": {"eq": "landsat-9"}}`, operators `eq neq lt lte gt gte`) |
 
 ### Cache
 
@@ -108,5 +131,5 @@ CRS (UTM for Sentinel-2, lat/lon for ERA5).
 
 ```bash
 uv run pytest              # offline suite
-uv run pytest -m live      # real openEO / Earth Data Hub calls, needs cubesip.yaml
+uv run pytest -m live      # real openEO / STAC / Earth Data Hub calls, needs cubesip.yaml
 ```

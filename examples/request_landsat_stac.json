@@ -1,5 +1,5 @@
 {
-  "driver": "openeo",
+  "driver": "stac",
   "dataset": "https://planetarycomputer.microsoft.com/api/stac/v1/collections/landsat-c2-l2",
   "variables": ["red", "nir08", "qa_pixel"],
   "geohash": "qem7k2",

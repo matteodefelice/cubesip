@@ -4,7 +4,7 @@ The target user is an analyst or researcher who needs a quick and smart way to r
 
 # HIGH-LEVEL WORKFLOW
 The user requests (calling a Python function for now):
-- a specific dataset on one of the available drivers (openEO, EarthDataHub or local filesystem for Zarr file)
+- a specific dataset on one of the available drivers (openEO, CDSE openEO Federation, arbitrary STAC, EarthDataHub or local filesystem)
 - the set of bands / variables that are needed
 - an area using geohash (for example `qem7`)
 - a time slice between two days (it can also be NULL if the dataset does not have a temporal dimension)
@@ -40,7 +40,11 @@ The code checking the request should check if:
 
 ## DRIVERS
 
-OpenEO can be used to access OpenEO collections (for example `SENTINEL2_L2A`) or arbitrary STAC (for example https://planetarycomputer.microsoft.com/api/stac/v1/collections/landsat-c2-l2). Arbitrary STAC can be loaded using `load_stac` from OpenEO
+Five drivers, each with one meaning for `dataset`:
+
+- `openeo`: collections (for example `SENTINEL2_L2A`) of one openEO back-end, any of those listed on https://hub.openeo.org; the default is the Copernicus Data Space Ecosystem (https://openeo.dataspace.copernicus.eu)
+- `cdse_federation`: collections of the Copernicus Data Space Ecosystem openEO Federation (https://openeofed.dataspace.copernicus.eu), which federates CDSE and Terrascope (for example `TERRASCOPE_S2_NDVI_V2`, `AGERA5`)
+- `stac`: arbitrary STAC collections (for example https://planetarycomputer.microsoft.com/api/stac/v1/collections/landsat-c2-l2), loaded using `load_stac` on an openEO back-end (`openeo` or `cdse_federation`)
 
 Earth Data Hub can be used to access ERA5 or other datasets in the catalogue https://earthdatahub.destine.eu/catalogue
 

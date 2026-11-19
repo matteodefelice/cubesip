@@ -14,7 +14,18 @@ def test_example_config_loads(tmp_path: Path) -> None:
     config = load_config(cfg_file)
     assert config.manifest == (tmp_path / "data" / "manifest.csv").resolve()
     assert config.openeo.auth.method == "oidc"
+    assert config.cdse_federation.url == "https://openeofed.dataspace.copernicus.eu"
+    assert config.stac.backend == "openeo"
     assert config.earthdatahub.token is None  # empty string in template means "not set"
+
+
+def test_new_sections_are_optional(tmp_path: Path) -> None:
+    """A config written before cdse_federation / stac existed still loads, with defaults."""
+    cfg_file = tmp_path / "cubesip.yaml"
+    cfg_file.write_text("manifest: m.csv\nopeneo:\n  url: https://openeo.example.eu\n")
+    config = load_config(cfg_file)
+    assert config.cdse_federation.url == "https://openeofed.dataspace.copernicus.eu"
+    assert config.stac.backend == "openeo"
 
 
 def test_secrets_never_printed(tmp_path: Path) -> None:
