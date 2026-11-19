@@ -77,6 +77,50 @@ def encode(lat: float, lon: float, precision: int = 6) -> str:
     return "".join(chars)
 
 
+def containing(box: BBox, max_precision: int = MAX_LENGTH) -> str:
+    """Smallest cell containing ``box`` (cell edges included), at most ``max_precision`` long.
+
+    A box lying on a cell's edge belongs to that cell, so the box of a cell gives the cell
+    back, and a point gives the same cell as :func:`encode`. Raises ValueError when no cell
+    contains the box: level-1 cells are 45 x 45 degrees, so a box crossing the equator, the
+    prime meridian or any other multiple of 45 degrees is not inside any geohash.
+    """
+    west, south, east, north = box
+    if not (-180 <= west <= east <= 180 and -90 <= south <= north <= 90):
+        raise ValueError(f"invalid box {tuple(box)}: need west <= east, south <= north")
+    if not 1 <= max_precision <= MAX_LENGTH:
+        raise ValueError(f"max_precision must be 1-{MAX_LENGTH}")
+    lon_iv = [-180.0, 180.0]
+    lat_iv = [-90.0, 90.0]
+    is_lon = True
+    chars = []
+    bits = 0
+    nbits = 0
+    while len(chars) < max_precision:
+        interval, low, high = (lon_iv, west, east) if is_lon else (lat_iv, south, north)
+        mid = (interval[0] + interval[1]) / 2
+        if low >= mid:  # upper half checked first, like encode() for a point on an edge
+            bits = (bits << 1) | 1
+            interval[0] = mid
+        elif high <= mid:
+            bits <<= 1
+            interval[1] = mid
+        else:  # the box straddles this split: the cell so far is the smallest
+            break
+        is_lon = not is_lon
+        nbits += 1
+        if nbits == 5:
+            chars.append(ALPHABET[bits])
+            bits = 0
+            nbits = 0
+    if not chars:
+        raise ValueError(
+            f"no geohash contains the box {tuple(box)}: it crosses a level-1 cell edge "
+            "(multiples of 45 degrees, such as the equator or the prime meridian)"
+        )
+    return "".join(chars)
+
+
 def ancestors(geohash: str, include_self: bool = True) -> list[str]:
     """Cells containing ``geohash``, longest prefix first: 'qem7' -> ['qem7', 'qem', 'qe', 'q']."""
     value = validate(geohash)

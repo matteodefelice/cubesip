@@ -75,12 +75,13 @@ src/cubesip/
   __init__.py            public API: Request, check, run, load_config, geohash
   request.py             Request / TimeRange model
   config.py              YAML config model + lookup
-  geohash.py             bbox, encode, ancestors, covers
+  geohash.py             bbox, encode, containing, ancestors, covers
   spatial.py             dims/CRS detection, bbox transform, subset
   manifest.py            CSV read/append/lock, cache lookup
   output.py              file naming, NetCDF writing/reading, provenance attrs
   checker.py             CheckReport + check()
   api.py                 check() / run() orchestration, Result
+  processing.py          containing_geohash (WKT -> cell), regrid (results onto a reference grid)
   drivers/base.py        Driver ABC, XarraySourceDriver (shared by local + edh)
   drivers/local.py       LocalDriver
   drivers/edh.py         EarthDataHubDriver
@@ -208,6 +209,14 @@ Each milestone ends with green `uv run pytest` and `uv run ruff check .`.
 
 **M6 Docs** (README usage, request fields, cache rules done)
 - README walkthrough of the NDVI use case (request -> check -> run -> NDVI with xarray).
+
+**M7 Processing** (done, offline tests)
+- `processing.containing_geohash(wkt)`: smallest cell holding the geometry's bounding box
+  (edges included), via `geohash.containing`; shapely reads the WKT (EPSG:4326, lon first).
+- `processing.regrid(sources, reference, method=...)`: rasterio `reproject` (GDAL warp) onto
+  the reference's CRS and cells, lazily per dask block over the non-spatial dims; float
+  output, NaN where the source has no data. A single-cell source axis (ERA5 for a small
+  geohash) has no cell size, so it is stretched over the reference.
 
 ## 5. Risks and things to verify during implementation
 
