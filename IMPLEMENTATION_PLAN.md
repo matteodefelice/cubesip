@@ -29,6 +29,12 @@ a stored refresh token). With no valid pixel in the request (one fully cloudy sc
 answers HTTP 200 with an empty body; the openEO drivers now raise `EmptyResultError` instead
 of leaving a 0-byte file. `auth.client_id` is now passed to the oidc login (it was ignored).
 
+**TESSERA driver (2026-11-19):** `tessera` reads TESSERA embeddings with geotessera's Zarr API
+(`GeoTesseraZarr.read_region`, one call per year), optional extra `cubesip[tessera]`
+(geotessera >= 0.11, Python 3.12+). Verified live on the public v1.1 store
+(`https://data.source.coop/tessera/tessera/zarr/v1.1-dclimate`): `u094v8`, 2024, 62x83 px,
+128 channels, EPSG:32631, all pixels valid, ~7 s; a child geohash is served from the cache.
+
 ## 1. Decisions
 
 ### Agreed with the user (2026-11-18)
@@ -49,7 +55,7 @@ of leaving a 0-byte file. `auth.client_id` is now passed to the oidc login (it w
 | API | Two steps: `cubesip.check(request)` (no download) then `cubesip.run(request)`. `run(force=True)` bypasses the cache |
 | Manifest write | Automatic after a successful download; the new rows are also returned in `Result.manifest_rows` |
 | Request input | JSON file / JSON string / dict, validated by a pydantic model; JSON schema generated into `schemas/request.schema.json` |
-| Drivers | `openeo`: collections of the back-end at `openeo.url` (any on https://hub.openeo.org; default CDSE `https://openeo.dataspace.copernicus.eu`). `cdse_federation`: collections of `https://openeofed.dataspace.copernicus.eu` (CDSE + Terrascope). `stac`: STAC collection URL, `load_stac` on the back-end named in `stac.backend` (`openeo` default, or `cdse_federation`). `edh`: Earth Data Hub Zarr. `local`: files on disk. Each driver accepts one kind of `dataset` and refuses the other kind with a pointer to the right driver |
+| Drivers | `openeo`: collections of the back-end at `openeo.url` (any on https://hub.openeo.org; default CDSE `https://openeo.dataspace.copernicus.eu`). `cdse_federation`: collections of `https://openeofed.dataspace.copernicus.eu` (CDSE + Terrascope). `stac`: STAC collection URL, `load_stac` on the back-end named in `stac.backend` (`openeo` default, or `cdse_federation`). `edh`: Earth Data Hub Zarr. `tessera`: TESSERA embeddings via geotessera, `dataset` = store version resolved to the store URL, variable `embedding` (time, band, y, x), whole calendar years only, options `bands` / `depth`. `local`: files on disk. Each driver accepts one kind of `dataset` and refuses the other kind with a pointer to the right driver |
 | openEO auth | Per back-end section (`openeo`, `cdse_federation`): `oidc` (stored refresh token, device-code login the first time), `client_credentials` or `basic` |
 | openEO execution | Synchronous `download()` only; checker warns when the estimate exceeds that back-end's `max_sync_bytes` |
 | EDH auth | Token in YAML, sent as a basic-auth `Authorization` header (`edh:<token>`) via fsspec `storage_options`, never embedded in a URL (aiohttp drops the header on cross-origin redirects) |
@@ -81,6 +87,7 @@ src/cubesip/
   drivers/openeo.py      OpenEOBackendDriver (shared openEO machinery), OpenEODriver,
                          CDSEFederationDriver (load_collection)
   drivers/stac.py        StacDriver (load_stac on the back-end named by stac.backend)
+  drivers/tessera.py     TesseraDriver (TESSERA embeddings via geotessera, optional extra)
 tests/                   offline suite; test_live.py runs only with -m live
 ```
 

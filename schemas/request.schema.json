@@ -29,19 +29,20 @@
   "description": "A data request for one dataset, one geohash cell and an optional time range.",
   "properties": {
     "driver": {
-      "description": "Data source: 'openeo' (collections of the openEO back-end in the config, default CDSE), 'cdse_federation' (collections of the CDSE openEO Federation: CDSE + Terrascope), 'stac' (any STAC collection, loaded with openEO load_stac), 'edh' (Earth Data Hub Zarr), 'local' (Zarr/NetCDF/GeoTIFF on disk).",
+      "description": "Data source: 'openeo' (collections of the openEO back-end in the config, default CDSE), 'cdse_federation' (collections of the CDSE openEO Federation: CDSE + Terrascope), 'stac' (any STAC collection, loaded with openEO load_stac), 'edh' (Earth Data Hub Zarr), 'tessera' (TESSERA embeddings via geotessera), 'local' (Zarr/NetCDF/GeoTIFF on disk).",
       "enum": [
         "openeo",
         "cdse_federation",
         "stac",
         "edh",
+        "tessera",
         "local"
       ],
       "title": "Driver",
       "type": "string"
     },
     "dataset": {
-      "description": "openeo / cdse_federation: collection id (e.g. SENTINEL2_L2A); stac: STAC collection URL; edh: dataset path (e.g. era5/era5-single-levels-atmosphere-v0) or full URL; local: path to the store/file.",
+      "description": "openeo / cdse_federation: collection id (e.g. SENTINEL2_L2A); stac: STAC collection URL; edh: dataset path (e.g. era5/era5-single-levels-atmosphere-v0) or full URL; tessera: store version (e.g. v1.1) or store URL; local: path to the store/file.",
       "minLength": 1,
       "title": "Dataset",
       "type": "string"
@@ -80,7 +81,7 @@
     },
     "options": {
       "additionalProperties": true,
-      "description": "Driver-specific extras, e.g. {'max_cloud_cover': 60} for openeo, cdse_federation and stac.",
+      "description": "Driver-specific extras, e.g. {'max_cloud_cover': 60} for openeo, cdse_federation and stac; {'bands': [0, 1, 2]} for tessera.",
       "title": "Options",
       "type": "object"
     }
