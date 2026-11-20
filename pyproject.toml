@@ -43,6 +43,7 @@ dev = [
 examples = [
     "ipykernel>=6.29",
     "matplotlib>=3.8",
+    "scikit-learn>=1.4",
 ]
 
 [build-system]
