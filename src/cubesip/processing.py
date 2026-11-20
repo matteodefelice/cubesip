@@ -4,11 +4,13 @@
   for a field or a region drawn elsewhere.
 - :func:`regrid`: put one or more results on the grid (CRS, cells) of a reference result,
   e.g. ERA5 on a Sentinel-2 grid, or Sentinel-2 averaged on a TESSERA grid.
+- :func:`mask_to_polygon`: blank out the cells of a result outside a polygon (e.g. a field).
 """
 
 from __future__ import annotations
 
 import threading
+import warnings
 from collections.abc import Callable, Iterable
 from functools import partial
 from typing import NamedTuple
@@ -16,9 +18,10 @@ from typing import NamedTuple
 import numpy as np
 import shapely
 import xarray as xr
-from pyproj import CRS
+from pyproj import CRS, Transformer
 from rasterio.crs import CRS as RasterioCRS
 from rasterio.enums import Resampling
+from rasterio.features import geometry_mask
 from rasterio.transform import Affine
 from rasterio.warp import reproject, transform_bounds
 
@@ -27,8 +30,10 @@ from cubesip.api import Result
 
 Gridded = Result | xr.Dataset | xr.DataArray
 
-_UNNAMED = "__cubesip_regrid__"  # temporary name when a DataArray goes through a Dataset
+_UNNAMED = "__cubesip_data__"  # temporary name when a DataArray goes through a Dataset
 _SPACING_RTOL = 1e-3  # tolerated relative deviation from an even coordinate spacing
+# a WKT edge is a straight line in lon/lat: points every 0.01 degrees keep it so once projected
+_DENSIFY_DEG = 0.01
 # rasterio hides a spurious "no geotransform" warning with warnings.catch_warnings, which is
 # not thread-safe: concurrent warps (dask threads) let it through, so warps run one at a time.
 _WARP_LOCK = threading.Lock()
@@ -47,13 +52,132 @@ def containing_geohash(wkt: str, max_precision: int = geohash.MAX_LENGTH) -> str
     contains the geometry (it crosses the equator, the prime meridian or another level-1
     edge; see :func:`cubesip.geohash.containing`).
     """
+    geometry = _read_wkt(wkt)
+    return geohash.containing(geohash.BBox(*geometry.bounds), max_precision)
+
+
+def _read_wkt(wkt: str) -> shapely.Geometry:
+    """Read WKT text into a shapely geometry, with a clear error if it is unreadable or empty."""
     try:
         geometry = shapely.from_wkt(wkt)
     except (shapely.errors.ShapelyError, TypeError) as exc:
         raise ValueError(f"cannot read WKT {wkt!r}: {exc}") from exc
     if geometry is None or geometry.is_empty:
         raise ValueError(f"WKT {wkt!r} is an empty geometry")
-    return geohash.containing(geohash.BBox(*geometry.bounds), max_precision)
+    return geometry
+
+
+# -- masking with a polygon ---------------------------------------------------------------
+
+
+def mask_to_polygon(
+    source: Gridded,
+    wkt: str,
+    *,
+    fill: float = np.nan,
+    all_touched: bool = False,
+) -> xr.Dataset | xr.DataArray:
+    """Blank out the cells of a result that lie outside a polygon, e.g. a field boundary.
+
+    The polygon is WKT in EPSG:4326 with longitude first, as for :func:`containing_geohash`:
+    a POLYGON or a MULTIPOLYGON. It is projected onto the result's own grid, following its
+    edges as straight lines in lon/lat. A cell is covered when its centre is inside the
+    polygon; with ``all_touched=True`` every cell the polygon touches is kept, which suits
+    polygons not much bigger than a cell.
+
+    Every variable on the x/y grid is masked; other variables, the grid, the coordinates and
+    the attributes are kept as they are. Cells outside get ``fill``: NaN by default (integer
+    bands then become floats), or e.g. 0 to keep the data type. The result is lazy when the
+    source is. A Result or Dataset gives a Dataset, a DataArray a DataArray.
+
+    A single cell along x or y (ERA5 for a small geohash) has no known size: its centre
+    decides, or with ``all_touched=True`` it is taken to reach across the polygon. A warning
+    is issued when no cell is kept (lon/lat swapped in the WKT, or a polygon between cell
+    centres).
+    """
+    geometry = _read_wkt(wkt)
+    if geometry.geom_type not in ("Polygon", "MultiPolygon"):
+        raise ValueError(f"expected a POLYGON or MULTIPOLYGON, got a {geometry.geom_type}")
+    ds = _to_dataset(source)
+    dims = spatial.find_dims(ds)
+    keep = _polygon_cells(ds, geometry, all_touched)
+    if not keep.any():
+        warnings.warn(
+            "the polygon covers no cell of the grid, so every cell is set to the fill value: "
+            "check that the WKT has longitude first, or use all_touched=True for a polygon "
+            "smaller than a cell",
+            stacklevel=2,
+        )
+    masked = {}
+    for name, var in ds.data_vars.items():
+        if not {dims.y, dims.x} <= set(var.dims):
+            continue
+        if var.dtype.kind not in "biuf":
+            raise TypeError(f"variable {name!r} is not numeric ({var.dtype}): cannot mask")
+        masked[name] = _mask_var(var, keep, fill)
+    out = ds.assign(masked)
+    if isinstance(source, xr.DataArray):
+        return out[_UNNAMED].rename(source.name)
+    return out
+
+
+def _to_native(geometry: shapely.Geometry, crs: str) -> shapely.Geometry:
+    """Project a lon/lat geometry into the dataset's CRS. Points are first added along the edges
+    so that they keep following straight lon/lat lines once projected.
+    """
+    target = CRS.from_user_input(crs)
+    if target == CRS.from_epsg(4326):
+        return geometry
+    to_native = Transformer.from_crs("EPSG:4326", target, always_xy=True)
+    dense = shapely.segmentize(geometry, max_segment_length=_DENSIFY_DEG)
+    return shapely.transform(
+        dense, lambda xy: np.column_stack(to_native.transform(xy[:, 0], xy[:, 1]))
+    )
+
+
+def _polygon_cells(ds: xr.Dataset, geometry: shapely.Geometry, all_touched: bool) -> xr.DataArray:
+    """Work out which cells of the dataset's grid the polygon covers, as a True/False (y, x)
+    array in the dataset's own row and column order. The polygon is burnt onto the grid
+    north-up with rasterio, then rows and columns are put back in the dataset's order.
+    """
+    dims = spatial.find_dims(ds)
+    crs = spatial.native_crs(ds)
+    native = _to_native(geometry, crs)
+    x = _x_values(ds, dims.x, crs)
+    y = np.asarray(ds[dims.y].values, float)
+    x_order, dx = _sort_axis(x, dims.x, descending=False)
+    y_order, dy = _sort_axis(y, dims.y, descending=True)
+    x0, y0 = float(x[x_order[0]]), float(y[y_order[0]])
+    west, south, east, north = native.bounds
+    if dx is None:  # a single cell has no known size: let it reach across the polygon
+        dx = 2 * max(abs(x0 - west), abs(east - x0)) or 1.0
+    if dy is None:
+        dy = -2 * max(abs(y0 - south), abs(north - y0)) or -1.0
+    inside = geometry_mask(
+        [native],
+        out_shape=(y.size, x.size),
+        transform=Affine(dx, 0.0, x0 - dx / 2, 0.0, dy, y0 - dy / 2),
+        all_touched=all_touched,
+        invert=True,
+    )
+    y_index, x_index = _inverse(y_order), _inverse(x_order)
+    if y_index is not None:
+        inside = inside[y_index, :]
+    if x_index is not None:
+        inside = inside[:, x_index]
+    return xr.DataArray(inside, dims=(dims.y, dims.x))
+
+
+def _mask_var(var: xr.DataArray, keep: xr.DataArray, fill: float) -> xr.DataArray:
+    """Set the cells of one variable outside the polygon to ``fill``. With a NaN fill, integer
+    data are turned into floating point first so that NaN can be stored.
+    """
+    if np.isnan(fill) and var.dtype.kind in "biu":
+        var = var.astype(np.result_type(var.dtype, np.float32))  # float32 for <= 16-bit ints
+    out = var.where(keep, fill)
+    # the source's on-disk encoding (integer type, scale factor...) may not fit any more
+    out.encoding = {k: v for k, v in var.encoding.items() if k == "grid_mapping"}
+    return out
 
 
 # -- regridding ---------------------------------------------------------------------------
@@ -176,7 +300,7 @@ def _sort_axis(values: np.ndarray, name: str, descending: bool) -> tuple[np.ndar
     steps = np.diff(ordered)
     step = float(np.median(steps))
     if step == 0 or not np.allclose(steps, step, rtol=_SPACING_RTOL, atol=0):
-        raise ValueError(f"coordinate {name!r} is not evenly spaced: cannot regrid")
+        raise ValueError(f"coordinate {name!r} is not evenly spaced: cubesip needs a regular grid")
     return order, step
 
 

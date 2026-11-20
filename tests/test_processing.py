@@ -1,4 +1,5 @@
-"""cubesip.processing: geohash of a WKT geometry, and regridding onto a reference grid."""
+"""cubesip.processing: geohash of a WKT geometry, regridding onto a reference grid, and
+masking with a polygon."""
 
 from datetime import date
 from pathlib import Path
@@ -6,13 +7,14 @@ from pathlib import Path
 import dask.array as dsa
 import numpy as np
 import pytest
+import shapely
 import xarray as xr
 from conftest import UTM_CENTER, era5_like, utm_like
 from pyproj import Transformer
 
 from cubesip import geohash as gh
 from cubesip.api import Result
-from cubesip.processing import containing_geohash, regrid
+from cubesip.processing import containing_geohash, mask_to_polygon, regrid
 from cubesip.request import TimeRange
 from cubesip.spatial import native_crs, subset
 
@@ -237,3 +239,97 @@ def test_regrid_errors() -> None:
         regrid(ds, ds.isel(x=[0, 1, 3]))
     with pytest.raises(TypeError, match="Result, Dataset or DataArray"):
         regrid(ds, "s2.nc")
+
+
+# -- mask_to_polygon ----------------------------------------------------------------------
+
+TRIANGLE = "POLYGON ((-3.75 45.26, -3.65 45.27, -3.70 45.34, -3.75 45.26))"
+TWO_SQUARES = (
+    "MULTIPOLYGON (((-3.78 45.25, -3.74 45.25, -3.74 45.29, -3.78 45.29, -3.78 45.25)), "
+    "((-3.66 45.31, -3.62 45.31, -3.62 45.35, -3.66 45.35, -3.66 45.31)))"
+)
+
+
+def _centres_inside(ds: xr.Dataset, wkt: str) -> np.ndarray:
+    lon, lat = _pixel_lonlat(ds)
+    return shapely.contains_xy(shapely.from_wkt(wkt), lon, lat)
+
+
+@pytest.mark.parametrize("wkt", [TRIANGLE, TWO_SQUARES])
+def test_mask_keeps_cells_whose_centre_is_inside(wkt: str) -> None:
+    ds = utm_like()  # UTM, 100 m cells
+    out = mask_to_polygon(ds, wkt)
+    inside = _centres_inside(ds, wkt)
+    assert 500 < inside.sum() < inside.size / 2
+    kept = out["B04"].notnull().values
+    np.testing.assert_array_equal(kept, np.broadcast_to(inside, kept.shape))
+    np.testing.assert_array_equal(out["B04"].values[:, inside], ds["B04"].values[:, inside])
+    assert out["B04"].attrs == ds["B04"].attrs
+    assert native_crs(out) == native_crs(ds)
+
+
+def test_mask_fill_value_and_integer_bands() -> None:
+    ds = utm_like().astype("int16")
+    outside = ~_centres_inside(ds, TRIANGLE)
+    with_nan = mask_to_polygon(ds, TRIANGLE)
+    assert with_nan["B04"].dtype == np.float32  # NaN needs floats
+    assert np.isnan(with_nan["B04"].values[:, outside]).all()
+    with_zero = mask_to_polygon(ds, TRIANGLE, fill=0)
+    assert with_zero["B04"].dtype == np.int16
+    assert (with_zero["B04"].values[:, outside] == 0).all()
+
+
+def test_mask_all_touched_keeps_cells_a_small_polygon_touches() -> None:
+    ds = utm_like()
+    to_geo = Transformer.from_crs(native_crs(ds), "EPSG:4326", always_xy=True)
+    xc, yc = ds["x"].values[50], ds["y"].values[80]
+    corners = [(10, 10), (30, 10), (30, 30), (10, 30), (10, 10)]  # 20 m square, off-centre
+    ring = [to_geo.transform(xc + dx, yc + dy) for dx, dy in corners]
+    wkt = "POLYGON ((" + ", ".join(f"{lon} {lat}" for lon, lat in ring) + "))"
+
+    with pytest.warns(UserWarning, match="covers no cell"):
+        centre_rule = mask_to_polygon(ds, wkt)
+    assert centre_rule["B04"].isnull().all()
+    touched = mask_to_polygon(ds, wkt, all_touched=True)["B04"].isel(t=0).notnull()
+    assert int(touched.sum()) == 1 and bool(touched.isel(y=80, x=50))
+
+
+@pytest.mark.parametrize("lon_0_360", [True, False])
+def test_mask_latlon_grid(lon_0_360: bool) -> None:
+    ds = latlon_like(lon_0_360=lon_0_360)  # 0.05 deg, descending latitude
+    out = mask_to_polygon(ds, _polygon(-3.92, 45.13, -3.61, 45.42))
+    lon = (ds["longitude"].values + 180) % 360 - 180
+    lat = ds["latitude"].values
+    expected = ((lat > 45.13) & (lat < 45.42))[:, None] & ((lon > -3.92) & (lon < -3.61))
+    np.testing.assert_array_equal(out["t2m"].isel(valid_time=0).notnull().values, expected)
+
+    ascending = ds.isel(latitude=slice(None, None, -1))
+    flipped = mask_to_polygon(ascending, _polygon(-3.92, 45.13, -3.61, 45.42))
+    xr.testing.assert_identical(flipped, out.isel(latitude=slice(None, None, -1)))
+
+
+def test_mask_single_cell_source() -> None:
+    code = gh.encode(LAT, LON, 6)
+    era5 = subset(era5_like(), gh.bbox(code), DAY1, ["t2m"])  # one cell holding the field
+    field = _polygon(*gh.bbox(code))
+    xr.testing.assert_identical(mask_to_polygon(era5, field, all_touched=True), era5)
+    with pytest.warns(UserWarning, match="covers no cell"):
+        centre_rule = mask_to_polygon(era5, field)  # the cell centre is outside the field
+    assert centre_rule["t2m"].isnull().all()
+
+
+def test_mask_dataarray_lazy_and_other_variables() -> None:
+    ds = utm_like().chunk({"t": 1}).assign(day=("t", np.arange(5)))
+    ndvi = ((ds["B08"] - ds["B04"]) / (ds["B08"] + ds["B04"])).rename("ndvi")
+    out = mask_to_polygon(ndvi, TRIANGLE)
+    assert isinstance(out, xr.DataArray) and out.name == "ndvi"
+    assert isinstance(out.data, dsa.Array)
+    xr.testing.assert_identical(mask_to_polygon(ds, TRIANGLE)["day"], ds["day"])
+
+
+def test_mask_errors() -> None:
+    ds = utm_like()
+    with pytest.raises(ValueError, match="POLYGON or MULTIPOLYGON"):
+        mask_to_polygon(ds, f"POINT ({LON} {LAT})")
+    with pytest.raises(ValueError, match="cannot read WKT"):
+        mask_to_polygon(ds, "POLYGON ((0 0")

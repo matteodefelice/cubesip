@@ -81,7 +81,8 @@ src/cubesip/
   output.py              file naming, NetCDF writing/reading, provenance attrs
   checker.py             CheckReport + check()
   api.py                 check() / run() orchestration, Result
-  processing.py          containing_geohash (WKT -> cell), regrid (results onto a reference grid)
+  processing.py          containing_geohash (WKT -> cell), regrid (results onto a reference grid),
+                         mask_to_polygon (cells outside a WKT polygon -> NaN or a fill value)
   drivers/base.py        Driver ABC, XarraySourceDriver (shared by local + edh)
   drivers/local.py       LocalDriver
   drivers/edh.py         EarthDataHubDriver
@@ -217,6 +218,11 @@ Each milestone ends with green `uv run pytest` and `uv run ruff check .`.
   the reference's CRS and cells, lazily per dask block over the non-spatial dims; float
   output, NaN where the source has no data. A single-cell source axis (ERA5 for a small
   geohash) has no cell size, so it is stretched over the reference.
+- `processing.mask_to_polygon(source, wkt, fill=nan, all_touched=False)`: the polygon is
+  densified in lon/lat, projected to the result's CRS and burnt north-up with rasterio
+  `geometry_mask` (cell centre inside, or every touched cell); the mask is put back in the
+  grid's row/column order and applied with `where`, lazily. Integer bands become floats
+  only for a NaN fill.
 
 ## 5. Risks and things to verify during implementation
 

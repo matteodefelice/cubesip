@@ -216,6 +216,29 @@ t2m, emb = regrid([era5, tessera], s2)  # a list gives a list
   is for the same geohash or one inside it: cubesip only returns one cell when the request
   area lies inside it. The reference itself needs at least two cells along x and y.
 
+`mask_to_polygon` blanks out the cells of a result outside a polygon, such as a field
+boundary, given as WKT in EPSG:4326 (longitude first):
+
+```python
+from cubesip.processing import mask_to_polygon
+
+field = "POLYGON ((-3.705 45.298, -3.695 45.298, -3.695 45.304, -3.705 45.304, -3.705 45.298))"
+s2_field = mask_to_polygon(s2, field)  # NaN outside the field
+s2_field = mask_to_polygon(s2, field, fill=0)  # 0 instead, keeping integer bands as integers
+era5_field = mask_to_polygon(era5, field, all_touched=True)  # keep the cells the field touches
+```
+
+- The polygon (POLYGON or MULTIPOLYGON) is projected onto the result's grid, so it works for
+  UTM and lat/lon results alike, including 0..360 longitudes.
+- A cell is kept when its centre is inside the polygon. `all_touched=True` keeps every cell
+  the polygon touches: use it for polygons not much bigger than a cell, such as a field in
+  ERA5, whose single cell (no known size) is then kept when the polygon is inside the result.
+- Every variable on the x/y grid is masked; the grid itself is not cropped. With the default
+  NaN fill, integer bands become floats. The result is lazy when the source is, and a
+  DataArray comes back as a DataArray.
+- A warning is issued when no cell is kept, which usually means latitude and longitude are
+  swapped in the WKT.
+
 ## Tests
 
 ```bash
