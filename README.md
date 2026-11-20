@@ -94,6 +94,15 @@ means inside the polygon and plots the polygon-averaged time series. Along the w
 VS Code with the `examples` group installed (`uv sync --group examples`); the first run
 downloads about 150 MB from the Copernicus Data Space Ecosystem.
 
+[examples/tessera_lst_model.ipynb](examples/tessera_lst_model.ipynb) is a small machine
+learning exercise. It fetches TESSERA embeddings and summer Landsat land-surface
+temperature for two neighbouring polygons in Seville, trains a ridge regression and a
+random forest on one polygon, and predicts the temperature of the other. It also compares
+the scores from a random pixel split, a block split and the unseen polygon, to show why
+random splits overstate accuracy for gridded data. It needs the `tessera` extra and the
+`examples` group (`uv sync --extra tessera --group examples`); the first run downloads
+about 160 MB.
+
 ### Drivers
 
 A request names one driver, which decides what `dataset` means and where the data come
