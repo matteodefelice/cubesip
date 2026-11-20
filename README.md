@@ -85,6 +85,15 @@ uv run --group examples python examples/precip_p90_yearly.py
 uv run --group examples python examples/precip_p90_yearly.py --years 1995 2024 --percentile 95
 ```
 
+[examples/polygon_ndvi_lst_soil_moisture.ipynb](examples/polygon_ndvi_lst_soil_moisture.ipynb)
+is a guided tour of the package. Starting from a polygon given as WKT, it fetches a year of
+Sentinel-2 NDVI (10 m), Landsat 8/9 land-surface temperature (30 m, via Planetary
+Computer STAC) and CLMS Sentinel-1 surface soil moisture (1 km). It then maps the annual
+means inside the polygon and plots the polygon-averaged time series. Along the way it uses
+`containing_geohash`, `check`, `run`, `regrid` and `mask_to_polygon`. Open it in Jupyter or
+VS Code with the `examples` group installed (`uv sync --group examples`); the first run
+downloads about 150 MB from the Copernicus Data Space Ecosystem.
+
 ### Drivers
 
 A request names one driver: it decides what `dataset` means and where the data come from.
