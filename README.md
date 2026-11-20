@@ -96,60 +96,11 @@ downloads about 150 MB from the Copernicus Data Space Ecosystem.
 
 ### Drivers
 
-A request names one driver: it decides what `dataset` means and where the data come from.
-
-| Driver | `dataset` | Data come from | Config section |
-|---|---|---|---|
-| `openeo` | openEO collection id, e.g. `SENTINEL2_L2A` | the openEO back-end at `openeo.url`: any back-end listed on the [openEO Hub](https://hub.openeo.org); default Copernicus Data Space Ecosystem (CDSE) | `openeo` |
-| `cdse_federation` | openEO collection id, e.g. `TERRASCOPE_S2_NDVI_V2`, `AGERA5` | the [CDSE openEO Federation](https://documentation.dataspace.copernicus.eu/APIs/openEO/federation/openeo_federation.html) (`openeofed.dataspace.copernicus.eu`), which routes each request to CDSE or Terrascope, so it has the CDSE collections plus Terrascope's | `cdse_federation` |
-| `stac` | STAC collection URL, e.g. Planetary Computer `.../collections/landsat-c2-l2` | any STAC catalogue, read by openEO `load_stac` on the back-end named in `stac.backend` (`openeo` or `cdse_federation`) | `stac` |
-| `edh` | Earth Data Hub dataset path, e.g. `era5/era5-single-levels-atmosphere-v0` | Earth Data Hub Zarr, streamed with xarray | `earthdatahub` |
-| `tessera` | TESSERA store version, e.g. `v1.1` (or a store URL) | [TESSERA](https://github.com/ucam-eo/tessera) embeddings, read with [geotessera](https://github.com/ucam-eo/geotessera)'s Zarr API from the public Source Cooperative stores | none |
-| `local` | path to a Zarr store, NetCDF or GeoTIFF | the local file system, read with xarray | none |
-
-The three openEO-based drivers log in with their section's `auth` and download
-synchronously. A collection id given to `stac`, or a URL given to `openeo` /
-`cdse_federation`, is refused with a message naming the right driver. The federation uses
-the same CDSE account but its own login client, so the first `cdse_federation` download asks
-for a device-code login once; the refresh token is then stored. When no pixel in the area
-and period is valid (e.g. a single fully cloudy scene), the federation returns an empty
-file; cubesip raises `EmptyResultError` and records nothing.
-
-#### TESSERA embeddings
-
-[TESSERA](https://github.com/ucam-eo/tessera) is a foundation model that compresses a year of
-Sentinel-1 and Sentinel-2 observations into a 128-channel embedding for each 10 m pixel
-(global, 2017-2025 for v1.1). The `tessera` driver reads them with geotessera; the stores are
-public, so no credentials are needed.
-
-```python
-result = cubesip.run(
-    {
-        "driver": "tessera",
-        "dataset": "v1.1",  # store version; v1, v2 or a store URL also work
-        "variables": ["embedding"],
-        "geohash": "u094v8",
-        "time": {"start": "2024-01-01", "end": "2024-12-31"},  # whole calendar years
-        "target_dir": "./data",
-        "options": {"bands": [0, 1, 2]},  # optional: keep these channels (zero-based)
-    }
-)
-emb = result.dataset["embedding"]  # float32 (time, band, y, x), native UTM, 10 m
-```
-
-- `variables` is always `["embedding"]`; values are dequantised floats, NaN where there is no
-  embedding (open water, outside coverage). A cell with no embedding at all raises
-  `EmptyResultError`.
-- `time` must be whole calendar years, one step per year stamped on 1 January: an embedding
-  summarises the whole year, and a cached annual file could not serve a partial period.
-- `options`: `bands` (channels to keep, in order) and `depth` (a published embedding prefix
-  of v2 stores, e.g. 16).
-- The grid is the UTM zone of the geohash centre (TESSERA uses the northern UTM CRS,
-  EPSG:326NN, everywhere). The manifest's dataset is the resolved store URL, so `v1.1` today
-  and a future default store are cached separately.
-- The whole cube is read into memory before writing: about 2.6 MB per year for a level-6
-  geohash, but about 2.7 GB per year for a level-4 cell at mid-latitudes; `check()` warns
-  above 2 GB.
+A request names one driver, which decides what `dataset` means and where the data come
+from: `openeo` and `cdse_federation` (openEO collections), `stac` (any STAC collection, via
+openEO), `edh` (Earth Data Hub), `tessera` (TESSERA embeddings) and `local` (Zarr, NetCDF,
+GeoTIFF). See [docs/drivers.md](docs/drivers.md) for what each one needs, how to filter
+scenes, and which filter operators the back-ends accept.
 
 ### Requests
 
@@ -158,13 +109,13 @@ Request documents follow [schemas/request.schema.json](schemas/request.schema.js
 
 | Field | Meaning |
 |---|---|
-| `driver` | `openeo`, `cdse_federation`, `stac`, `edh` or `local` (see [Drivers](#drivers)) |
+| `driver` | `openeo`, `cdse_federation`, `stac`, `edh`, `tessera` or `local` (see [docs/drivers.md](docs/drivers.md)) |
 | `dataset` | openEO collection id (`openeo`, `cdse_federation`); STAC collection URL (`stac`); EDH dataset path (`era5/era5-single-levels-atmosphere-v0`); TESSERA store version (`v1.1`); local path |
 | `variables` | bands / variables to retrieve |
 | `geohash` | area of interest (the geohash cell) |
 | `time` | `{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}`, both days included; `null` for static data |
 | `target_dir` | where the NetCDF is written |
-| `options` | `openeo`, `cdse_federation`, `stac`: `max_cloud_cover`, `properties` (`{"platform": {"eq": "landsat-9"}}`, operators `eq neq lt lte gt gte`); `tessera`: `bands`, `depth` |
+| `options` | `openeo`, `cdse_federation`, `stac`: `max_cloud_cover`, `properties` (`{"platform": {"eq": "landsat-9"}}`; CDSE accepts only `eq`, `lte` and `gte`, see [docs/drivers.md](docs/drivers.md#which-operators-work)); `tessera`: `bands`, `depth` |
 
 ### Cache
 
