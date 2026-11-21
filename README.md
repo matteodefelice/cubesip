@@ -141,6 +141,28 @@ reusing files from the old one. Rows written before cubesip recorded the back-en
 empty; they are still reused, and `check()` warns that their back-end is assumed. A
 manifest from an older version gets the new `backend` column the next time a row is added.
 
+### Managing the manifest
+
+`cubesip.manifest.Manifest` has helpers for looking after the manifest set in `cubesip.yaml`:
+
+```python
+from cubesip import load_config
+from cubesip.manifest import Manifest
+
+manifest = Manifest(load_config().manifest)
+summary = manifest.summarize()  # dict: rows, files, total and missing size, variables,
+                                # geohashes, period, and a `by_dataset` DataFrame
+missing = manifest.find_missing()  # DataFrame: one row per recorded file that is gone
+removed = manifest.prune()  # drop those rows (locked, atomic rewrite); returns them
+```
+
+`summarize()` returns plain data for programmatic use: scalar counts, sorted lists of
+drivers/users/hosts, and a `by_dataset` DataFrame (files, variables, cells, size and period
+per driver/dataset/back-end). A file counts as missing when its path no longer exists or its
+address is not a `file://` URI; `prune()` rewrites the CSV under the same lock as normal
+appends, keeps every remaining row (including columns written by other versions) and writes
+nothing when there is nothing to remove.
+
 ### Processing
 
 `cubesip.processing` holds helpers that work on requests and results.

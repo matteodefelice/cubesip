@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
@@ -116,6 +117,116 @@ def _safe(func) -> str:
         return str(func())
     except Exception:  # getuser() can fail in some service accounts
         return ""
+
+
+def _uri_exists(uri: str) -> bool:
+    """True when the uri still points at a file on disk; False for a deleted or moved file and for
+    addresses that are not file:// paths.
+    """
+    try:
+        return uri_to_path(uri).is_file()
+    except ValueError:
+        return False
+
+
+def _file_view(frame: pd.DataFrame) -> pd.DataFrame:
+    """Collapse the manifest to one row per file (uri): the newest metadata of that file, its
+    variables joined together, how many rows it spans, and whether it is still on disk.
+    """
+    if frame.empty:
+        return pd.DataFrame(
+            {
+                "uri": pd.Series(dtype=str),
+                "driver": pd.Series(dtype=str),
+                "dataset": pd.Series(dtype=str),
+                "backend": pd.Series(dtype=str),
+                "geohash": pd.Series(dtype=str),
+                "time_start": pd.Series(dtype=str),
+                "time_end": pd.Series(dtype=str),
+                "variables": pd.Series(dtype=str),
+                "rows": pd.Series(dtype="int64"),
+                "file_size_bytes": pd.Series(dtype="int64"),
+                "timestamp_utc": pd.Series(dtype=str),
+                "exists": pd.Series(dtype=bool),
+            }
+        )
+    sizes = pd.to_numeric(frame["file_size_bytes"], errors="coerce").fillna(0).astype("int64")
+    ordered = frame.assign(file_size_bytes=sizes, exists=frame["uri"].map(_uri_exists)).sort_values(
+        "timestamp_utc", kind="stable"
+    )
+    return (
+        ordered.groupby("uri", sort=False)
+        .agg(
+            driver=("driver", "last"),
+            dataset=("dataset", "last"),
+            backend=("backend", "last"),
+            geohash=("geohash", "last"),
+            time_start=("time_start", "min"),
+            time_end=("time_end", "max"),
+            variables=("variable", lambda values: ", ".join(sorted(set(values)))),
+            rows=("variable", "size"),
+            file_size_bytes=("file_size_bytes", "last"),
+            timestamp_utc=("timestamp_utc", "last"),
+            exists=("exists", "first"),
+        )
+        .reset_index()
+    )
+
+
+_DATASET_VIEW_COLUMNS = [
+    "driver",
+    "dataset",
+    "backend",
+    "files",
+    "missing_files",
+    "rows",
+    "variables",
+    "geohashes",
+    "size_bytes",
+    "time_start",
+    "time_end",
+]
+
+_COUNT_COLUMNS = {"files", "missing_files", "rows", "geohashes", "size_bytes"}
+
+
+def _by_dataset(frame: pd.DataFrame, view: pd.DataFrame) -> pd.DataFrame:
+    """One row per driver / dataset / back-end: how many files and rows, which variables and
+    cells, how much space, and the period covered.
+    """
+    if view.empty:
+        return pd.DataFrame(
+            {
+                column: pd.Series(dtype="int64" if column in _COUNT_COLUMNS else str)
+                for column in _DATASET_VIEW_COLUMNS
+            }
+        )
+    rows = []
+    for (driver, dataset, backend), files in view.groupby(
+        ["driver", "dataset", "backend"], sort=False
+    ):
+        file_rows = frame[frame["uri"].isin(files["uri"])]
+        rows.append(
+            {
+                "driver": driver,
+                "dataset": dataset,
+                "backend": backend,
+                "files": len(files),
+                "missing_files": int((~files["exists"]).sum()),
+                "rows": len(file_rows),
+                "variables": ", ".join(sorted(set(file_rows["variable"]))),
+                "geohashes": file_rows["geohash"].nunique(),
+                "size_bytes": int(files["file_size_bytes"].sum()),
+                "time_start": min((t for t in files["time_start"] if t), default=""),
+                "time_end": max((t for t in files["time_end"] if t), default=""),
+            }
+        )
+    return pd.DataFrame(rows, columns=_DATASET_VIEW_COLUMNS)
+
+
+def _missing(view: pd.DataFrame) -> pd.DataFrame:
+    """The rows of the per-file view whose file is gone, without the ``exists`` column."""
+    return view[~view["exists"]].drop(columns="exists").reset_index(drop=True)
 
 
 class Manifest:
@@ -232,3 +343,63 @@ class Manifest:
         return max(
             candidates, key=lambda hit: (len(hit.geohash), bool(hit.backend), hit.timestamp_utc)
         )
+
+    def summarize(self) -> dict[str, Any]:
+        """Summarise what the manifest records, as plain data for programmatic use: how many
+        rows, files and requests, the total size (and the size of files that are gone), which
+        drivers, datasets, variables, cells, users and hosts appear, the period covered, and a
+        ``by_dataset`` DataFrame with one row per driver / dataset / back-end. Works on an empty
+        or missing manifest (all counts zero, empty lists and an empty ``by_dataset``).
+        """
+        frame = self.read()
+        view = _file_view(frame)
+        missing = view[~view["exists"]]
+        return {
+            "manifest": str(self.path),
+            "rows": len(frame),
+            "files": len(view),
+            "missing_files": len(missing),
+            "requests": frame["request_id"].nunique(),
+            "datasets": frame.groupby(["driver", "dataset"]).ngroups,
+            "variables": frame["variable"].nunique(),
+            "geohashes": frame["geohash"].nunique(),
+            "drivers": sorted({value for value in frame["driver"] if value}),
+            "users": sorted({value for value in frame["user"] if value}),
+            "hosts": sorted({value for value in frame["hostname"] if value}),
+            "total_size_bytes": int(view["file_size_bytes"].sum()),
+            "missing_size_bytes": int(missing["file_size_bytes"].sum()),
+            "first_entry": str(view["timestamp_utc"].min()) if len(view) else "",
+            "last_entry": str(view["timestamp_utc"].max()) if len(view) else "",
+            "time_start": min((value for value in view["time_start"] if value), default=""),
+            "time_end": max((value for value in view["time_end"] if value), default=""),
+            "by_dataset": _by_dataset(frame, view),
+        }
+
+    def find_missing(self) -> pd.DataFrame:
+        """Report the files the manifest records that can no longer be opened, one row per file
+        (newest metadata, variables joined together, row count, recorded size), in manifest
+        order. A file counts as missing when its path no longer exists or its address is not a
+        file:// URI; an empty or missing manifest gives an empty report.
+        """
+        return _missing(_file_view(self.read()))
+
+    def prune(self) -> pd.DataFrame:
+        """Remove from the manifest the rows of files that are no longer on disk (the ones
+        :meth:`find_missing` reports) and return that report of what was removed. The file is
+        rewritten under the lock, atomically: written to a temporary file first, then renamed.
+        Every remaining row is kept as it was, extra columns written by another version of
+        cubesip included. Nothing is written when there is nothing to remove.
+        """
+        if not self.path.is_file():
+            return _missing(_file_view(self.read()))
+        with FileLock(self.lock_path, timeout=LOCK_TIMEOUT_S):
+            frame = self.read()
+            report = _missing(_file_view(frame))
+            if report.empty:
+                return report
+            keep = frame[~frame["uri"].isin(report["uri"])]
+            extra = [column for column in frame.columns if column not in COLUMNS]
+            tmp = self.path.with_name(self.path.name + ".prune")
+            keep[COLUMNS + extra].to_csv(tmp, index=False, encoding="utf-8")
+            tmp.replace(self.path)
+            return report
