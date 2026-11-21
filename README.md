@@ -103,6 +103,14 @@ random splits overstate accuracy for gridded data. It needs the `tessera` extra 
 `examples` group (`uv sync --extra tessera --group examples`); the first run downloads
 about 160 MB.
 
+[examples/fields_precip_delta_2024_2025.ipynb](examples/fields_precip_delta_2024_2025.ipynb)
+starts from a GeoParquet of 60,558 field boundaries in the Western Australia wheatbelt and
+maps the change in annual precipitation per field between 2024 and 2025 as a choropleth.
+The ERA5 `tp` downloads are addressed by the two level-3 geohash cells that cover all the
+fields — two requests of ~3 MB instead of one per field — and each field takes the annual
+totals and the delta of the 0.25° ERA5 cell it falls in. It needs the `examples` group and
+an Earth Data Hub token.
+
 ### Drivers
 
 A request names one driver, which decides what `dataset` means and where the data come
