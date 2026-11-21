@@ -129,27 +129,33 @@ def _uri_exists(uri: str) -> bool:
         return False
 
 
+_FILE_VIEW_DTYPES = {
+    "uri": str,
+    "driver": str,
+    "dataset": str,
+    "backend": str,
+    "geohash": str,
+    "time_start": str,
+    "time_end": str,
+    "variables": str,
+    "rows": "int64",
+    "file_size_bytes": "int64",
+    "timestamp_utc": str,
+    "exists": bool,
+}
+
+
+def _empty_frame(dtypes: dict[str, str | type]) -> pd.DataFrame:
+    """An empty table with the given columns and kinds: text, whole numbers or True/False."""
+    return pd.DataFrame(columns=list(dtypes)).astype(dtypes)
+
+
 def _file_view(frame: pd.DataFrame) -> pd.DataFrame:
     """Collapse the manifest to one row per file (uri): the newest metadata of that file, its
     variables joined together, how many rows it spans, and whether it is still on disk.
     """
     if frame.empty:
-        return pd.DataFrame(
-            {
-                "uri": pd.Series(dtype=str),
-                "driver": pd.Series(dtype=str),
-                "dataset": pd.Series(dtype=str),
-                "backend": pd.Series(dtype=str),
-                "geohash": pd.Series(dtype=str),
-                "time_start": pd.Series(dtype=str),
-                "time_end": pd.Series(dtype=str),
-                "variables": pd.Series(dtype=str),
-                "rows": pd.Series(dtype="int64"),
-                "file_size_bytes": pd.Series(dtype="int64"),
-                "timestamp_utc": pd.Series(dtype=str),
-                "exists": pd.Series(dtype=bool),
-            }
-        )
+        return _empty_frame(_FILE_VIEW_DTYPES)
     sizes = pd.to_numeric(frame["file_size_bytes"], errors="coerce").fillna(0).astype("int64")
     ordered = frame.assign(file_size_bytes=sizes, exists=frame["uri"].map(_uri_exists)).sort_values(
         "timestamp_utc", kind="stable"
@@ -173,21 +179,19 @@ def _file_view(frame: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-_DATASET_VIEW_COLUMNS = [
-    "driver",
-    "dataset",
-    "backend",
-    "files",
-    "missing_files",
-    "rows",
-    "variables",
-    "geohashes",
-    "size_bytes",
-    "time_start",
-    "time_end",
-]
-
-_COUNT_COLUMNS = {"files", "missing_files", "rows", "geohashes", "size_bytes"}
+_DATASET_VIEW_DTYPES = {
+    "driver": str,
+    "dataset": str,
+    "backend": str,
+    "files": "int64",
+    "missing_files": "int64",
+    "rows": "int64",
+    "variables": str,
+    "geohashes": "int64",
+    "size_bytes": "int64",
+    "time_start": str,
+    "time_end": str,
+}
 
 
 def _by_dataset(frame: pd.DataFrame, view: pd.DataFrame) -> pd.DataFrame:
@@ -195,12 +199,7 @@ def _by_dataset(frame: pd.DataFrame, view: pd.DataFrame) -> pd.DataFrame:
     cells, how much space, and the period covered.
     """
     if view.empty:
-        return pd.DataFrame(
-            {
-                column: pd.Series(dtype="int64" if column in _COUNT_COLUMNS else str)
-                for column in _DATASET_VIEW_COLUMNS
-            }
-        )
+        return _empty_frame(_DATASET_VIEW_DTYPES)
     rows = []
     for (driver, dataset, backend), files in view.groupby(
         ["driver", "dataset", "backend"], sort=False
@@ -221,7 +220,7 @@ def _by_dataset(frame: pd.DataFrame, view: pd.DataFrame) -> pd.DataFrame:
                 "time_end": max((t for t in files["time_end"] if t), default=""),
             }
         )
-    return pd.DataFrame(rows, columns=_DATASET_VIEW_COLUMNS)
+    return pd.DataFrame(rows, columns=list(_DATASET_VIEW_DTYPES))
 
 
 def _missing(view: pd.DataFrame) -> pd.DataFrame:
@@ -271,16 +270,23 @@ class Manifest:
         with self.path.open(newline="", encoding="utf-8") as handle:
             return next(csv.reader(handle), [])
 
+    def _rewrite(self, frame: pd.DataFrame) -> None:
+        """Replace the manifest file with the given rows: the columns cubesip knows first, then
+        any columns another version may have added. The rows go to a temporary file that is then
+        renamed over the manifest, so a crash halfway cannot leave a half-written file behind.
+        Call it only while holding the lock.
+        """
+        extra = [column for column in frame.columns if column not in COLUMNS]
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        frame[COLUMNS + extra].to_csv(tmp, index=False, encoding="utf-8")
+        tmp.replace(self.path)
+
     def _upgrade(self) -> None:
         """Rewrite a manifest made by an older version of cubesip so that it has the current
         columns. Call it only while holding the lock. Without it, new rows would put values under
         the wrong column headers.
         """
-        frame = self.read()  # adds missing columns as empty strings
-        extra = [column for column in frame.columns if column not in COLUMNS]
-        tmp = self.path.with_name(self.path.name + ".upgrade")
-        frame[COLUMNS + extra].to_csv(tmp, index=False, encoding="utf-8")
-        tmp.replace(self.path)
+        self._rewrite(self.read())  # read() adds missing columns as empty strings
 
     def find_covering(
         self, request: Request, dataset_key: str, backend: str = ""
@@ -398,8 +404,5 @@ class Manifest:
             if report.empty:
                 return report
             keep = frame[~frame["uri"].isin(report["uri"])]
-            extra = [column for column in frame.columns if column not in COLUMNS]
-            tmp = self.path.with_name(self.path.name + ".prune")
-            keep[COLUMNS + extra].to_csv(tmp, index=False, encoding="utf-8")
-            tmp.replace(self.path)
+            self._rewrite(keep)
             return report

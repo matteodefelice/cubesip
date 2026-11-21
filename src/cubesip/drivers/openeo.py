@@ -182,10 +182,11 @@ class OpenEOBackendDriver(Driver):
         """
         meta = self.metadata(request)
         bands = available_bands(meta)
+        missing = [] if bands is None else [v for v in request.variables if v not in bands]
         info = DatasetInfo(
             dataset=self.dataset_key(request.dataset),
             available_variables=bands,
-            missing_variables=[v for v in request.variables if bands and v not in bands],
+            missing_variables=missing,
             crs=_single_epsg(meta),
         )
         if bands is None:

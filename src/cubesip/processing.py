@@ -100,7 +100,7 @@ def mask_to_polygon(
         raise ValueError(f"expected a POLYGON or MULTIPOLYGON, got a {geometry.geom_type}")
     ds = _to_dataset(source)
     dims = spatial.find_dims(ds)
-    keep = _polygon_cells(ds, geometry, all_touched)
+    keep = _polygon_cells(ds, dims, geometry, all_touched)
     if not keep.any():
         warnings.warn(
             "the polygon covers no cell of the grid, so every cell is set to the fill value: "
@@ -135,12 +135,13 @@ def _to_native(geometry: shapely.Geometry, crs: str) -> shapely.Geometry:
     )
 
 
-def _polygon_cells(ds: xr.Dataset, geometry: shapely.Geometry, all_touched: bool) -> xr.DataArray:
+def _polygon_cells(
+    ds: xr.Dataset, dims: spatial.CubeDims, geometry: shapely.Geometry, all_touched: bool
+) -> xr.DataArray:
     """Work out which cells of the dataset's grid the polygon covers, as a True/False (y, x)
     array in the dataset's own row and column order. The polygon is burnt onto the grid
     north-up with rasterio, then rows and columns are put back in the dataset's order.
     """
-    dims = spatial.find_dims(ds)
     crs = spatial.native_crs(ds)
     native = _to_native(geometry, crs)
     x = _x_values(ds, dims.x, crs)

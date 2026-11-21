@@ -137,6 +137,15 @@ def to_native_bounds(box: BBox, crs: str) -> BBox:
     return BBox(west, south, east, north)
 
 
+def _contiguous(idx: np.ndarray) -> slice | np.ndarray:
+    """A slice covering the same positions when they are side by side, otherwise the positions
+    themselves.
+    """
+    if idx[-1] - idx[0] + 1 == idx.size:
+        return slice(int(idx[0]), int(idx[-1]) + 1)
+    return idx
+
+
 def _cell_indices(
     values: np.ndarray, lo: float, hi: float, periodic: bool = False
 ) -> slice | np.ndarray:
@@ -158,9 +167,7 @@ def _cell_indices(
         raise EmptySelectionError(
             f"area [{lo}, {hi}] is outside the dataset extent [{values.min()}, {values.max()}]"
         )
-    if idx[-1] - idx[0] + 1 == idx.size:
-        return slice(int(idx[0]), int(idx[-1]) + 1)
-    return idx
+    return _contiguous(idx)
 
 
 def subset(
@@ -206,7 +213,6 @@ def subset(
                 f"no time steps between {time.start} and {time.end} "
                 f"(dataset covers {times.min()} to {times.max()})"
             )
-        contiguous = idx[-1] - idx[0] + 1 == idx.size
-        indexers[dims.time] = slice(int(idx[0]), int(idx[-1]) + 1) if contiguous else idx
+        indexers[dims.time] = _contiguous(idx)
 
     return selected.isel(indexers)
