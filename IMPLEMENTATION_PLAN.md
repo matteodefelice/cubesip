@@ -168,7 +168,9 @@ Each milestone ends with green `uv run pytest` and `uv run ruff check .`.
   `to_native_bounds` (pyproj `Transformer.transform_bounds` with densification),
   `subset` (0..360 longitudes, descending latitude, half-cell growth, inclusive end day).
   Tests on synthetic datasets: lat/lon ascending + descending, 0..360, UTM, static (no time).
-- `manifest`: `read`, `append` with `filelock`, header on first write.
+- `manifest`: `read`, `append` with `filelock`, header on first write; `summarize`
+  (counts, sizes, period, per-dataset breakdown), `find_missing` and `prune` for files
+  that are no longer on disk.
 
 **M2 Checker + API (offline)**
 - `Manifest.find_covering` with the rules above.
