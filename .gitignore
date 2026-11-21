@@ -9,6 +9,7 @@ data/
 *.zarr/
 manifest.csv
 manifest.csv.lock
+manifest.csv.tmp
 
 # --- Python ---
 __pycache__/
