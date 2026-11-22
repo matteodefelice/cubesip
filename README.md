@@ -111,6 +111,14 @@ fields — two requests of ~3 MB instead of one per field — and each field tak
 totals and the delta of the 0.25° ERA5 cell it falls in. It needs the `examples` group and
 an Earth Data Hub token.
 
+[examples/fields_ndvi_delta_2024_2025.ipynb](examples/fields_ndvi_delta_2024_2025.ipynb) is
+the Sentinel-2 counterpart of the field choropleth: mean NDVI over March–June per field,
+2025 vs 2024, at 10 m with clouds masked by SCL. That resolution changes the geohash
+trade-off — one of the level-3 cells above would be ~50 GB of Sentinel-2 per season — so the
+notebook works on the fields of a single level-5 cell (~4 x 5 km, ~50 MB per season), chosen
+for its large paddocks, and each field is averaged over its own 10 m pixels. It needs the
+`examples` group and an openEO login.
+
 ### Drivers
 
 A request names one driver, which decides what `dataset` means and where the data come
