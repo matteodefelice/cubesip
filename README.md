@@ -43,7 +43,8 @@ ndvi = (ds["B08"] - ds["B04"]) / (ds["B08"] + ds["B04"])
 
 `check` and `run` read the config from `./cubesip.yaml` (or `$CUBESIP_CONFIG`); pass a path
 or a `cubesip.Config` as the second argument to use another one. `run(req, force=True)`
-ignores the cache.
+ignores the cache. NetCDF files go to the request's `target_dir`, or to `data_dir` from the
+config (default `./data` next to `cubesip.yaml`) when the request leaves it out.
 
 Band values are returned as the provider stores them; cubesip does not apply scale factors.
 Convert to physical units before computing indices, using the `scale`/`offset` listed in the
@@ -139,7 +140,7 @@ Request documents follow [schemas/request.schema.json](schemas/request.schema.js
 | `variables` | bands / variables to retrieve |
 | `geohash` | area of interest (the geohash cell) |
 | `time` | `{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}`, both days included; `null` for static data |
-| `target_dir` | where the NetCDF is written |
+| `target_dir` | optional: where the NetCDF is written; when left out, `data_dir` from `cubesip.yaml` is used |
 | `options` | `openeo`, `cdse_federation`, `stac`: `max_cloud_cover`, `properties` (`{"platform": {"eq": "landsat-9"}}`; CDSE accepts only `eq`, `lte` and `gte`, see [docs/drivers.md](docs/drivers.md#which-operators-work)); `tessera`: `bands`, `depth` |
 
 ### Cache

@@ -1,4 +1,5 @@
-"""YAML configuration: credentials for the openEO back-ends / Earth Data Hub and the manifest.
+"""YAML configuration: credentials for the openEO back-ends / Earth Data Hub, the manifest and the
+default data folder.
 
 The real file (``cubesip.yaml``) is git-ignored; ``cubesip.example.yaml`` is the template.
 Secrets are held as ``SecretStr`` so they never show up in reprs, logs or tracebacks.
@@ -57,6 +58,8 @@ class EarthDataHubConfig(_Section):
 
 class Config(_Section):
     manifest: Path
+    # Folder for downloaded NetCDF files when a request does not give its own target_dir.
+    data_dir: Path = Path("data")
     openeo: OpenEOConfig = Field(default_factory=OpenEOConfig)
     cdse_federation: OpenEOConfig = Field(
         default_factory=lambda: OpenEOConfig(url=CDSE_FEDERATION_URL)
@@ -86,8 +89,8 @@ def find_config(path: str | Path | None = None) -> Path:
 
 
 def load_config(path: str | Path | None = None) -> Config:
-    """Read the YAML config file, check that it is valid and return it as a Config. A relative
-    manifest path is taken relative to the folder of the config file.
+    """Read the YAML config file, check that it is valid and return it as a Config. Relative
+    manifest and data_dir paths are taken relative to the folder of the config file.
     """
     config_path = find_config(path)
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
@@ -95,9 +98,15 @@ def load_config(path: str | Path | None = None) -> Config:
     for section in ("openeo", "cdse_federation", "stac", "earthdatahub"):
         _drop_empty(raw.get(section))
     config = Config.model_validate(raw)
-    if not config.manifest.is_absolute():
-        config.manifest = (config_path.parent / config.manifest).resolve()
+    config.manifest = _resolve(config.manifest, config_path.parent)
+    config.data_dir = _resolve(config.data_dir, config_path.parent)
     return config
+
+
+def _resolve(path: Path, base: Path) -> Path:
+    """Expand ~ in a path and make it absolute, taking a relative path from ``base``."""
+    path = path.expanduser()
+    return path if path.is_absolute() else (base / path).resolve()
 
 
 def _drop_empty(node: object) -> None:

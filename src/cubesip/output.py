@@ -26,9 +26,12 @@ def dataset_slug(dataset_key: str) -> str:
     return slug[:40] or "dataset"
 
 
-def output_path(request: Request, dataset_key: str, backend: str = "") -> Path:
-    """Choose where to save the NetCDF file of a request, inside the request's target folder. The
-    file name looks like ``{driver}_{slug}_{geohash}_{start}-{end}_{hash8}.nc``.
+def output_path(
+    request: Request, dataset_key: str, backend: str = "", default_dir: str | Path = "data"
+) -> Path:
+    """Choose where to save the NetCDF file of a request: inside the request's ``target_dir``, or
+    ``default_dir`` (the config's ``data_dir``) when the request gives none. The file name looks
+    like ``{driver}_{slug}_{geohash}_{start}-{end}_{hash8}.nc``.
 
     ``hash8`` covers dataset, variables, options and back-end, so the same request sent to
     two back-ends gives two files instead of one overwriting the other.
@@ -46,7 +49,8 @@ def output_path(request: Request, dataset_key: str, backend: str = "") -> Path:
         identity["backend"] = backend
     digest = hashlib.sha1(canonical_json(identity).encode()).hexdigest()[:8]
     name = f"{request.driver}_{dataset_slug(dataset_key)}_{request.geohash}_{period}_{digest}.nc"
-    return Path(request.target_dir).expanduser().resolve() / name
+    folder = request.target_dir if request.target_dir is not None else default_dir
+    return Path(folder).expanduser().resolve() / name
 
 
 def provenance_attrs(request: Request, dataset_key: str, backend: str = "") -> dict[str, str]:

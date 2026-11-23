@@ -73,7 +73,11 @@ class Request(BaseModel):
     time: TimeRange | None = Field(
         default=None, description="Days to retrieve (inclusive); null for static datasets."
     )
-    target_dir: Path = Field(description="Local directory where the NetCDF output is written.")
+    target_dir: Path | None = Field(
+        default=None,
+        description="Local directory where the NetCDF output is written; when left out, the "
+        "data_dir set in the config file is used.",
+    )
     options: dict[str, Any] = Field(
         default_factory=dict,
         description="Driver-specific extras, e.g. {'max_cloud_cover': 60} for openeo, "

@@ -49,8 +49,9 @@ def check(request: RequestLike, config: ConfigLike = None) -> checker.CheckRepor
 def run(request: RequestLike, config: ConfigLike = None, *, force: bool = False) -> Result:
     """Get the data for a request. If a file already on disk covers it (and ``force`` is False),
     open that file and return the part that was asked for, without writing anything. Otherwise
-    download the data with the right driver, save them as a NetCDF file in the target folder, and
-    record the file in the manifest so it can be reused next time.
+    download the data with the right driver, save them as a NetCDF file in the request's
+    ``target_dir`` (or the config's ``data_dir`` when the request gives none), and record the file
+    in the manifest so it can be reused next time.
     """
     req = _as_request(request)
     cfg = _as_config(config)
@@ -74,7 +75,7 @@ def run(request: RequestLike, config: ConfigLike = None, *, force: bool = False)
             f"available: {info.available_variables}"
         )
 
-    out_path = output_path(req, key, backend)
+    out_path = output_path(req, key, backend, cfg.data_dir)
     partial = out_path.with_name(out_path.stem + ".partial.nc")
     log.info("fetching %s %s for %s -> %s", req.driver, key, req.geohash, out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

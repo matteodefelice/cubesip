@@ -44,7 +44,7 @@ def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
     FakeDriver.backend = ""
     monkeypatch.setattr(api, "get_driver", lambda name, cfg: FakeDriver(cfg))
     monkeypatch.setattr(checker, "get_driver", lambda name, cfg: FakeDriver(cfg))
-    return Config(manifest=tmp_path / "manifest.csv")
+    return Config(manifest=tmp_path / "manifest.csv", data_dir=tmp_path / "default")
 
 
 @pytest.fixture
@@ -85,6 +85,21 @@ def test_check_then_run_then_cache(config: Config, request_dict: dict) -> None:
     assert second.manifest_rows == []
     assert FakeDriver.fetches == 1
     xr.testing.assert_allclose(second.dataset["t2m"].load(), first.dataset["t2m"].load())
+
+
+def test_without_target_dir_writes_to_config_data_dir(
+    config: Config, request_dict: dict, tmp_path: Path
+) -> None:
+    del request_dict["target_dir"]
+    result = cubesip.run(request_dict, config)
+    assert result.path.parent == (tmp_path / "default").resolve()
+    assert result.path.is_file()
+
+
+def test_target_dir_overrides_config_data_dir(config: Config, request_dict: dict) -> None:
+    result = cubesip.run(request_dict, config)
+    assert result.path.parent == Path(request_dict["target_dir"]).resolve()
+    assert not config.data_dir.exists()
 
 
 def test_child_geohash_shorter_period_reuses_parent(config: Config, request_dict: dict) -> None:

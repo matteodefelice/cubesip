@@ -5,6 +5,10 @@
 # CSV manifest shared by all requests (one row per variable per file).
 manifest: ./data/manifest.csv
 
+# Default folder for the downloaded NetCDF files. A request can write elsewhere by setting its
+# own `target_dir`. Relative paths are taken from the folder of this file.
+data_dir: ./data
+
 # --- openEO back-ends -------------------------------------------------------------------
 # Drivers:
 #   openeo           collections of the back-end below (any listed on https://hub.openeo.org)

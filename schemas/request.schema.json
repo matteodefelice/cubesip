@@ -74,10 +74,18 @@
       "description": "Days to retrieve (inclusive); null for static datasets."
     },
     "target_dir": {
-      "description": "Local directory where the NetCDF output is written.",
-      "format": "path",
-      "title": "Target Dir",
-      "type": "string"
+      "anyOf": [
+        {
+          "format": "path",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Local directory where the NetCDF output is written; when left out, the data_dir set in the config file is used.",
+      "title": "Target Dir"
     },
     "options": {
       "additionalProperties": true,
@@ -90,8 +98,7 @@
     "driver",
     "dataset",
     "variables",
-    "geohash",
-    "target_dir"
+    "geohash"
   ],
   "title": "cubesip request",
   "type": "object",
