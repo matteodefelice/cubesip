@@ -121,6 +121,14 @@ class Request(BaseModel):
         return cls.model_validate_json(Path(source).read_text(encoding="utf-8"))
 
 
+def split(request: Request) -> list[Request]:
+    """Split a request into 32 requests, one per child geohash cell (one character longer), each
+    about 1/32 of the area and otherwise identical. Useful when a request is too big for one
+    download: run each part on its own, e.g. ``[cubesip.run(r) for r in cubesip.split(req)]``.
+    """
+    return [request.model_copy(update={"geohash": cell}) for cell in gh.children(request.geohash)]
+
+
 def canonical_json(value: Any) -> str:
     """Write a value as compact JSON with sorted keys, so the same content always gives exactly the
     same text.

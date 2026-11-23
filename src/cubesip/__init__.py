@@ -4,7 +4,7 @@ from cubesip import geohash, processing
 from cubesip.api import Result, check, run
 from cubesip.checker import CheckReport
 from cubesip.config import Config, load_config
-from cubesip.request import Request, TimeRange
+from cubesip.request import Request, TimeRange, split
 
 __version__ = "0.1.0.dev0"
 
@@ -19,4 +19,5 @@ __all__ = [
     "load_config",
     "processing",
     "run",
+    "split",
 ]

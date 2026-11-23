@@ -62,6 +62,11 @@ into `# %%` cells to run one at a time in VS Code, or as a whole:
 uv run --group examples python examples/quickstart.py
 ```
 
+[examples/split_request.py](examples/split_request.py) shows what to do when a request is too
+big for one download: `cubesip.split()` turns it into 32 requests, one per child geohash cell,
+that are run and cached one by one and joined back into a single map. Same cell style as the
+quickstart; it needs a Copernicus Data Space account for openEO.
+
 Two scripts in [examples/](examples/) compute a yearly metric for one site. Both make one
 cubesip request per year, write a PNG chart and a CSV table to `data/`, and read the cached
 files instead of downloading when run again. Both default to the same cropland cell in the

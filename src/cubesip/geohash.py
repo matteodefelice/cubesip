@@ -137,6 +137,16 @@ def ancestors(geohash: str, include_self: bool = True) -> list[str]:
     return [value[:n] for n in range(start, 0, -1)]
 
 
+def children(geohash: str) -> list[str]:
+    """The 32 cells one character longer that together make up a geohash: 'qem' gives 'qem0' ...
+    'qemz'.
+    """
+    value = validate(geohash)
+    if len(value) == MAX_LENGTH:
+        raise ValueError(f"{value!r} is already at the maximum length ({MAX_LENGTH})")
+    return [value + char for char in ALPHABET]
+
+
 def covers(parent: str, child: str) -> bool:
     """True if the cell ``parent`` contains the cell ``child``. A geohash contains another when the
     other starts with it, so a cell also contains itself.
