@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import xarray as xr
 
-from cubesip import checker, spatial
+from cubesip import checker, databricks, spatial
 from cubesip.config import Config, load_config
 from cubesip.drivers import get_driver
 from cubesip.manifest import Manifest, make_rows
@@ -76,8 +77,27 @@ def run(request: RequestLike, config: ConfigLike = None, *, force: bool = False)
         )
 
     out_path = output_path(req, key, backend, cfg.data_dir)
-    partial = out_path.with_name(out_path.stem + ".partial.nc")
     log.info("fetching %s %s for %s -> %s", req.driver, key, req.geohash, out_path)
+    if req.stage_locally:
+        _fetch_staged(driver, req, out_path)
+    else:
+        _fetch_in_place(driver, req, out_path)
+
+    dataset = open_netcdf(out_path)
+    try:
+        crs = spatial.native_crs(dataset)
+    except ValueError:
+        crs = ""
+    rows = make_rows(req, dataset_key=key, path=out_path, crs=crs, backend=backend)
+    manifest.append(rows)
+    return Result(path=out_path, dataset=dataset, from_cache=False, manifest_rows=rows)
+
+
+def _fetch_in_place(driver: Any, req: Request, out_path: Path) -> None:
+    """Download into a ``.partial.nc`` file next to the target, then rename it, so an interrupted
+    download never leaves a file that looks complete.
+    """
+    partial = out_path.with_name(out_path.stem + ".partial.nc")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         driver.fetch(req, partial)
@@ -92,14 +112,17 @@ def run(request: RequestLike, config: ConfigLike = None, *, force: bool = False)
         partial.unlink(missing_ok=True)
         raise
 
-    dataset = open_netcdf(out_path)
-    try:
-        crs = spatial.native_crs(dataset)
-    except ValueError:
-        crs = ""
-    rows = make_rows(req, dataset_key=key, path=out_path, crs=crs, backend=backend)
-    manifest.append(rows)
-    return Result(path=out_path, dataset=dataset, from_cache=False, manifest_rows=rows)
+
+def _fetch_staged(driver: Any, req: Request, out_path: Path) -> None:
+    """Download into a local temporary directory, then move the file to ``out_path`` with
+    Databricks ``dbutils`` (for Unity Catalog volumes, which xarray cannot write to). The
+    temporary directory is removed in every case.
+    """
+    with tempfile.TemporaryDirectory(prefix="cubesip-") as tmp:
+        local = Path(tmp) / out_path.name
+        driver.fetch(req, local)
+        log.info("moving %s -> %s with dbutils", local, out_path)
+        databricks.move_to_target(local, out_path)
 
 
 def _as_request(request: RequestLike) -> Request:

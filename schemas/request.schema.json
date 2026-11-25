@@ -87,6 +87,12 @@
       "description": "Local directory where the NetCDF output is written; when left out, the data_dir set in the config file is used.",
       "title": "Target Dir"
     },
+    "stage_locally": {
+      "default": false,
+      "description": "Databricks: write the NetCDF to a local temporary directory (e.g. /tmp) first, then move it to target_dir with dbutils.fs.mv. Needed for Unity Catalog volumes, which xarray cannot write to directly.",
+      "title": "Stage Locally",
+      "type": "boolean"
+    },
     "options": {
       "additionalProperties": true,
       "description": "Driver-specific extras, e.g. {'max_cloud_cover': 60} for openeo, cdse_federation and stac; {'bands': [0, 1, 2]} for tessera.",

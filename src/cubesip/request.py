@@ -78,6 +78,12 @@ class Request(BaseModel):
         description="Local directory where the NetCDF output is written; when left out, the "
         "data_dir set in the config file is used.",
     )
+    stage_locally: bool = Field(
+        default=False,
+        description="Databricks: write the NetCDF to a local temporary directory (e.g. /tmp) "
+        "first, then move it to target_dir with dbutils.fs.mv. Needed for Unity Catalog "
+        "volumes, which xarray cannot write to directly.",
+    )
     options: dict[str, Any] = Field(
         default_factory=dict,
         description="Driver-specific extras, e.g. {'max_cloud_cover': 60} for openeo, "

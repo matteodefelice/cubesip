@@ -146,6 +146,7 @@ Request documents follow [schemas/request.schema.json](schemas/request.schema.js
 | `geohash` | area of interest (the geohash cell) |
 | `time` | `{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}`, both days included; `null` for static data |
 | `target_dir` | optional: where the NetCDF is written; when left out, `data_dir` from `cubesip.yaml` is used |
+| `stage_locally` | optional, default `false`. On Databricks, set it to `true` when the target is a Unity Catalog volume (`/Volumes/...`): the NetCDF is written to a local temporary directory (e.g. `/tmp`) and then moved to the target with `dbutils.fs.mv`, since xarray cannot write to volumes directly |
 | `options` | `openeo`, `cdse_federation`, `stac`: `max_cloud_cover`, `properties` (`{"platform": {"eq": "landsat-9"}}`; CDSE accepts only `eq`, `lte` and `gte`, see [docs/drivers.md](docs/drivers.md#which-operators-work)); `tessera`: `bands`, `depth` |
 
 ### Cache

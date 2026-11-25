@@ -215,3 +215,58 @@ def test_static_request_on_temporal_dataset_warns(config: Config, request_dict: 
     report = cubesip.check({**request_dict, "time": None}, config)
     assert report.ok
     assert any("every time step" in w for w in report.warnings)
+
+
+class FakeDbutils:
+    """Stands in for Databricks dbutils: records calls and moves files on the local disk."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+        self.fs = self
+
+    def mkdirs(self, path: str) -> None:
+        self.calls.append(("mkdirs", path))
+        Path(path).mkdir(parents=True, exist_ok=True)
+
+    def mv(self, src: str, dst: str) -> None:
+        self.calls.append(("mv", src, dst))
+        assert src.startswith("file:")
+        Path(src.removeprefix("file:")).replace(dst)
+
+
+def test_stage_locally_moves_with_dbutils(
+    config: Config, request_dict: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDbutils()
+    monkeypatch.setattr(api.databricks, "get_dbutils", lambda: fake)
+    result = cubesip.run({**request_dict, "stage_locally": True}, config)
+    try:
+        assert result.path.exists() and not result.from_cache
+        assert result.path.parent == Path(request_dict["target_dir"]).resolve()
+        assert [c[0] for c in fake.calls] == ["mkdirs", "mv"]
+        assert fake.calls[1][2] == result.path.as_posix()
+        assert not Path(fake.calls[1][1].removeprefix("file:")).parent.exists()  # tmp cleaned
+        assert set(result.dataset.data_vars) == {"t2m", "tp"}
+    finally:
+        result.dataset.close()
+    # same file name as without staging, so the cache is shared
+    again = cubesip.run(request_dict, config)
+    assert again.from_cache and again.path == result.path
+    again.dataset.close()
+
+
+def test_stage_locally_failed_fetch_moves_nothing(
+    config: Config, request_dict: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDbutils()
+    monkeypatch.setattr(api.databricks, "get_dbutils", lambda: fake)
+    FakeDriver.fail = True
+    with pytest.raises(RuntimeError):
+        cubesip.run({**request_dict, "stage_locally": True}, config)
+    assert fake.calls == []
+    assert not config.manifest.exists()
+
+
+def test_stage_locally_outside_databricks_is_explained(config: Config, request_dict: dict) -> None:
+    with pytest.raises(RuntimeError, match="dbutils"):
+        cubesip.run({**request_dict, "stage_locally": True}, config)
