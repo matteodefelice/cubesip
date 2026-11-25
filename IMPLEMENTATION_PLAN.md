@@ -35,6 +35,17 @@ of leaving a 0-byte file. `auth.client_id` is now passed to the oidc login (it w
 (`https://data.source.coop/tessera/tessera/zarr/v1.1-dclimate`): `u094v8`, 2024, 62x83 px,
 128 channels, EPSG:32631, all pixels valid, ~7 s; a child geohash is served from the cache.
 
+**Beeldmateriaal driver (2026-11-25):** `beeldmateriaal` reads the Beeldmateriaal Nederland
+8 cm orthophoto tiles (the open-data GeoTIFFs behind PDOK Luchtfoto RGB / CIR): 1 x 1 km
+tiles in EPSG:28992, 3-band uint8, internally tiled JPEG (q95), no overviews; RGB and CIR
+(NIR, red, green; CIR red equals RGB red). Tiles are located via the download portal's
+GeoJSON index per year and product (`BM_HRL{year}O_{RGB|CIR}_TIF.json`, published for 2025
+and 2026), cached as CSV in `<data_dir>/_index/`. Windows are read with rasterio over
+`/vsicurl/` onto a grid snapped to the resolution (default 0.08 m). PDOK's WMS was rejected:
+JPEG only, max 2500 px. Verified live: `u178kdc` (Utrecht), 2025, 4 variables,
+1185x1915 px, pixels identical to a direct read of the tile, ~6 s plus ~15 s for the two
+index downloads the first time; a child geohash is served from the cache.
+
 ## 1. Decisions
 
 ### Agreed with the user (2026-11-18)
@@ -90,6 +101,7 @@ src/cubesip/
                          CDSEFederationDriver (load_collection)
   drivers/stac.py        StacDriver (load_stac on the back-end named by stac.backend)
   drivers/tessera.py     TesseraDriver (TESSERA embeddings via geotessera, optional extra)
+  drivers/beeldmateriaal.py  BeeldmateriaalDriver (Dutch 8 cm orthophoto GeoTIFF tiles)
 tests/                   offline suite; test_live.py runs only with -m live
 ```
 

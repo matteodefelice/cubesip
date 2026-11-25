@@ -16,7 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from cubesip import geohash as gh
 
-DriverName = Literal["openeo", "cdse_federation", "stac", "edh", "tessera", "local"]
+DriverName = Literal[
+    "openeo", "cdse_federation", "stac", "edh", "tessera", "beeldmateriaal", "local"
+]
 
 
 class TimeRange(BaseModel):
@@ -56,6 +58,7 @@ class Request(BaseModel):
         "config, default CDSE), 'cdse_federation' (collections of the CDSE openEO Federation: "
         "CDSE + Terrascope), 'stac' (any STAC collection, loaded with openEO load_stac), "
         "'edh' (Earth Data Hub Zarr), 'tessera' (TESSERA embeddings via geotessera), "
+        "'beeldmateriaal' (Dutch 8 cm aerial orthophotos, RGB + near-infrared), "
         "'local' (Zarr/NetCDF/GeoTIFF on disk)."
     )
     dataset: str = Field(
@@ -64,6 +67,7 @@ class Request(BaseModel):
         "stac: STAC collection URL; "
         "edh: dataset path (e.g. era5/era5-single-levels-atmosphere-v0) or full URL; "
         "tessera: store version (e.g. v1.1) or store URL; "
+        "beeldmateriaal: ortho_hr; "
         "local: path to the store/file.",
     )
     variables: list[str] = Field(
@@ -87,7 +91,8 @@ class Request(BaseModel):
     options: dict[str, Any] = Field(
         default_factory=dict,
         description="Driver-specific extras, e.g. {'max_cloud_cover': 60} for openeo, "
-        "cdse_federation and stac; {'bands': [0, 1, 2]} for tessera.",
+        "cdse_federation and stac; {'bands': [0, 1, 2]} for tessera; "
+        "{'resolution': 0.25} for beeldmateriaal.",
     )
 
     @field_validator("geohash")

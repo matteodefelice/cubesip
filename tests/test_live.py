@@ -139,3 +139,24 @@ def test_tessera_embeddings(config, tmp_path: Path) -> None:
     assert result.manifest_rows[0]["crs"] == "EPSG:32631"
     child = {**request, "geohash": "u094v8k"}
     assert cubesip.run(child, cfg).from_cache
+
+
+def test_beeldmateriaal_orthophoto(config, tmp_path: Path) -> None:
+    """Public Beeldmateriaal tiles: no credentials needed (downloads two ~40 MB tile indexes)."""
+    cfg = _isolated(config, tmp_path).model_copy(update={"data_dir": tmp_path})
+    request = {
+        "driver": "beeldmateriaal",
+        "dataset": "ortho_hr",
+        "variables": ["red", "nir"],
+        "geohash": "u178kdc",
+        "time": {"start": "2025-01-01", "end": "2025-12-31"},
+        "target_dir": str(tmp_path),
+    }
+    report = cubesip.check(request, cfg)
+    assert report.ok, report.summary()
+    result = cubesip.run(request, cfg)
+    ds = result.dataset
+    assert ds.sizes["x"] > 1000 and float(ds["x"][1] - ds["x"][0]) == pytest.approx(0.08)
+    assert int((ds["nir"] > 0).sum()) > 0
+    assert result.manifest_rows[0]["crs"] == "EPSG:28992"
+    assert cubesip.run({**request, "geohash": "u178kdck"}, cfg).from_cache

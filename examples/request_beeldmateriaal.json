@@ -1,0 +1,7 @@
+{
+  "driver": "beeldmateriaal",
+  "dataset": "ortho_hr",
+  "variables": ["red", "green", "blue", "nir"],
+  "geohash": "u178kdc",
+  "time": {"start": "2025-01-01", "end": "2025-12-31"}
+}

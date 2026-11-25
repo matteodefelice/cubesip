@@ -2,7 +2,8 @@
 
 Retrieve remote sensing and climate data for a site or region, addressed by a
 [geohash](https://en.wikipedia.org/wiki/Geohash), from openEO back-ends, any STAC catalogue,
-Earth Data Hub, TESSERA embeddings or local Zarr/NetCDF/GeoTIFF, with a shared CSV manifest
+Earth Data Hub, TESSERA embeddings, Dutch 8 cm aerial orthophotos or local
+Zarr/NetCDF/GeoTIFF, with a shared CSV manifest
 that avoids downloading the same data twice.
 
 See [plan.MD](plan.MD) for the goals and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for
@@ -67,6 +68,15 @@ big for one download: `cubesip.split()` turns it into 32 requests, one per child
 that are run and cached one by one and joined back into a single map. Same cell style as the
 quickstart; it needs a Copernicus Data Space account for openEO.
 
+[examples/aerial_photo_nl.py](examples/aerial_photo_nl.py) does the same for the 8 cm spring
+aerial photo of a polder in the Netherlands (`beeldmateriaal` driver, no account needed): it
+retrieves the red, green, blue and near-infrared bands of a level-7 geohash and plots them as
+true colour, false colour and NDVI side by side.
+
+```bash
+uv run --group examples python examples/aerial_photo_nl.py
+```
+
 Two scripts in [examples/](examples/) compute a yearly metric for one site. Both make one
 cubesip request per year, write a PNG chart and a CSV table to `data/`, and read the cached
 files instead of downloading when run again. Both default to the same cropland cell in the
@@ -129,9 +139,10 @@ for its large paddocks, and each field is averaged over its own 10 m pixels. It 
 
 A request names one driver, which decides what `dataset` means and where the data come
 from: `openeo` and `cdse_federation` (openEO collections), `stac` (any STAC collection, via
-openEO), `edh` (Earth Data Hub), `tessera` (TESSERA embeddings) and `local` (Zarr, NetCDF,
-GeoTIFF). See [docs/drivers.md](docs/drivers.md) for what each one needs, how to filter
-scenes, and which filter operators the back-ends accept.
+openEO), `edh` (Earth Data Hub), `tessera` (TESSERA embeddings), `beeldmateriaal` (8 cm
+RGB and near-infrared aerial orthophotos of the Netherlands, as in PDOK Luchtfoto) and
+`local` (Zarr, NetCDF, GeoTIFF). See [docs/drivers.md](docs/drivers.md) for what each one
+needs, how to filter scenes, and which filter operators the back-ends accept.
 
 ### Requests
 
@@ -140,14 +151,14 @@ Request documents follow [schemas/request.schema.json](schemas/request.schema.js
 
 | Field | Meaning |
 |---|---|
-| `driver` | `openeo`, `cdse_federation`, `stac`, `edh`, `tessera` or `local` (see [docs/drivers.md](docs/drivers.md)) |
-| `dataset` | openEO collection id (`openeo`, `cdse_federation`); STAC collection URL (`stac`); EDH dataset path (`era5/era5-single-levels-atmosphere-v0`); TESSERA store version (`v1.1`); local path |
+| `driver` | `openeo`, `cdse_federation`, `stac`, `edh`, `tessera`, `beeldmateriaal` or `local` (see [docs/drivers.md](docs/drivers.md)) |
+| `dataset` | openEO collection id (`openeo`, `cdse_federation`); STAC collection URL (`stac`); EDH dataset path (`era5/era5-single-levels-atmosphere-v0`); TESSERA store version (`v1.1`); `ortho_hr` (`beeldmateriaal`); local path |
 | `variables` | bands / variables to retrieve |
 | `geohash` | area of interest (the geohash cell) |
 | `time` | `{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}`, both days included; `null` for static data |
 | `target_dir` | optional: where the NetCDF is written; when left out, `data_dir` from `cubesip.yaml` is used |
 | `stage_locally` | optional, default `false`. On Databricks, set it to `true` when the target is a Unity Catalog volume (`/Volumes/...`): the NetCDF is written to a local temporary directory (e.g. `/tmp`) and then moved to the target with `dbutils.fs.mv`, since xarray cannot write to volumes directly |
-| `options` | `openeo`, `cdse_federation`, `stac`: `max_cloud_cover`, `properties` (`{"platform": {"eq": "landsat-9"}}`; CDSE accepts only `eq`, `lte` and `gte`, see [docs/drivers.md](docs/drivers.md#which-operators-work)); `tessera`: `bands`, `depth` |
+| `options` | `openeo`, `cdse_federation`, `stac`: `max_cloud_cover`, `properties` (`{"platform": {"eq": "landsat-9"}}`; CDSE accepts only `eq`, `lte` and `gte`, see [docs/drivers.md](docs/drivers.md#which-operators-work)); `tessera`: `bands`, `depth`; `beeldmateriaal`: `resolution` |
 
 ### Cache
 
