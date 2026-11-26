@@ -7,7 +7,7 @@ cdse_federation  openEO collection id        the CDSE openEO Federation (CDSE + 
 stac             STAC collection URL         load_stac on the back-end named by stac.backend
 edh              Earth Data Hub dataset      Earth Data Hub Zarr, read with xarray
 tessera          TESSERA store version       TESSERA embeddings Zarr, read with geotessera
-beeldmateriaal   ortho_hr                    Dutch 8 cm aerial orthophoto GeoTIFF tiles (RGB + CIR)
+beeldmateriaal   ortho_hr / ortho_lr         Dutch 8 / 25 cm aerial orthophoto GeoTIFF tiles
 local            Zarr/NetCDF/GeoTIFF path    the local file system, read with xarray
 """
 

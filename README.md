@@ -139,7 +139,7 @@ for its large paddocks, and each field is averaged over its own 10 m pixels. It 
 
 A request names one driver, which decides what `dataset` means and where the data come
 from: `openeo` and `cdse_federation` (openEO collections), `stac` (any STAC collection, via
-openEO), `edh` (Earth Data Hub), `tessera` (TESSERA embeddings), `beeldmateriaal` (8 cm
+openEO), `edh` (Earth Data Hub), `tessera` (TESSERA embeddings), `beeldmateriaal` (8 or 25 cm
 RGB and near-infrared aerial orthophotos of the Netherlands, as in PDOK Luchtfoto) and
 `local` (Zarr, NetCDF, GeoTIFF). See [docs/drivers.md](docs/drivers.md) for what each one
 needs, how to filter scenes, and which filter operators the back-ends accept.
@@ -152,7 +152,7 @@ Request documents follow [schemas/request.schema.json](schemas/request.schema.js
 | Field | Meaning |
 |---|---|
 | `driver` | `openeo`, `cdse_federation`, `stac`, `edh`, `tessera`, `beeldmateriaal` or `local` (see [docs/drivers.md](docs/drivers.md)) |
-| `dataset` | openEO collection id (`openeo`, `cdse_federation`); STAC collection URL (`stac`); EDH dataset path (`era5/era5-single-levels-atmosphere-v0`); TESSERA store version (`v1.1`); `ortho_hr` (`beeldmateriaal`); local path |
+| `dataset` | openEO collection id (`openeo`, `cdse_federation`); STAC collection URL (`stac`); EDH dataset path (`era5/era5-single-levels-atmosphere-v0`); TESSERA store version (`v1.1`); `ortho_hr` (8 cm) or `ortho_lr` (25 cm) (`beeldmateriaal`); local path |
 | `variables` | bands / variables to retrieve |
 | `geohash` | area of interest (the geohash cell) |
 | `time` | `{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}`, both days included; `null` for static data |

@@ -33,7 +33,9 @@ print(site, cubesip.geohash.bbox(site))
 
 # %%
 # The request: the high-resolution orthophoto, all four bands, the 2025 spring flight
-# (time is given as whole calendar years: there is one flight per year).
+# (time is given as whole calendar years: there is one flight per year). "ortho_hr" is the
+# 8 cm spring mosaic (RGB from 2021, near-infrared from 2025); "ortho_lr" is the 25 cm
+# summer mosaic (RGB and near-infrared from 2022), e.g. for near-infrared in 2024.
 request = {
     "driver": "beeldmateriaal",
     "dataset": "ortho_hr",

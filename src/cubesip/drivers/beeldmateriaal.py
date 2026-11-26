@@ -1,30 +1,34 @@
-"""Beeldmateriaal driver: high-resolution (8 cm) aerial orthophotos of the Netherlands.
+"""Beeldmateriaal driver: aerial orthophotos of the Netherlands at 8 cm and 25 cm.
 
 The Dutch government programme Beeldmateriaal Nederland (https://www.beeldmateriaal.nl) flies
-the whole country every spring (leafless season) and publishes the orthophoto mosaic as open
-data (CC BY 4.0): an RGB and a colour-infrared (CIR) product, each cut into 1 x 1 km GeoTIFF
-tiles in RD New (EPSG:28992) at 8 cm (5 cm in some areas). The same imagery is behind PDOK's
-"Luchtfoto RGB" / "Luchtfoto CIR" web services, which only serve rendered JPEG images; this
-driver reads the GeoTIFF tiles themselves, window by window over HTTP, without downloading
-whole tiles. No account is needed.
+the whole country twice a year and publishes the orthophoto mosaics as open data (CC BY 4.0),
+as GeoTIFF tiles in RD New (EPSG:28992). The same imagery is behind PDOK's "Luchtfoto RGB" /
+"Luchtfoto CIR" web services, which only serve rendered JPEG images; this driver reads the
+GeoTIFF tiles themselves, window by window over HTTP, without downloading whole tiles. No
+account is needed.
 
-- dataset: ``ortho_hr`` (the spring high-resolution orthophoto mosaic)
+- dataset: the mosaic, which fixes the resolution and the season:
+
+  - ``ortho_hr``: high resolution, 8 cm (5 cm in some areas), spring flight (leafless),
+    1 x 1 km tiles. RGB from 2021, near-infrared (CIR) from 2025.
+  - ``ortho_lr``: low resolution, 25 cm, summer flight (leaves on), 4 x 4 km tiles. RGB and
+    near-infrared (CIR) from 2022.
+
 - variables: ``red``, ``green``, ``blue`` (RGB tiles) and ``nir`` (CIR tiles, whose bands are
   near-infrared, red, green). Only the products the variables need are read: ``["nir",
   "red"]`` reads the CIR tiles only.
-- time: whole calendar years, one step per year stamped on 1 January (the flight is in
-  early spring). Tiles are published for 2025 onwards; earlier high-resolution years exist
-  only as PDOK web-service renderings.
-- options: ``resolution`` (metres, default 0.08; 1000 must be a multiple of it, e.g. 0.05,
-  0.1, 0.25, 1). Pixels are copied untouched when the tile has that resolution, otherwise
-  averaged (or repeated, when finer).
+- time: whole calendar years, one step per year stamped on 1 January.
+- options: ``resolution`` (metres; default the mosaic's own, 0.08 or 0.25; 1000 must be a
+  multiple of it, e.g. 0.05, 0.1, 0.5, 1). Pixels are copied untouched when the tile has that
+  resolution, otherwise averaged (or repeated, when finer).
 - grid: RD New (EPSG:28992), pixel edges on multiples of ``resolution``, uint8. Where no tile
   exists (sea, outside the Netherlands, not delivered yet) the values are 0.
 
-Tiles are located through the GeoJSON index the Beeldmateriaal download portal uses
-(https://basisdata.nl/hwh-portal/download/index.html), one per year and product. The index
-(~40 MB) is downloaded once and kept as a small CSV under ``<data_dir>/_index/``; it is
-refreshed after a week, since the current year's tiles are delivered over several months.
+Tiles are located through the GeoJSON indexes that the Beeldmateriaal download portal
+(https://basisdata.nl/hwh-portal/download/index.html) loads, one per mosaic, year and product,
+from ``INDEX_BASE``. These list the same tile URLs as the portal's "download as text" option.
+An index is downloaded once and kept as a small CSV under ``<data_dir>/_index/``; indexes of
+the last two years are refreshed after a week, since tiles are delivered over several months.
 """
 
 from __future__ import annotations
@@ -32,11 +36,11 @@ from __future__ import annotations
 import csv
 import logging
 import math
-import re
 import time
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -59,12 +63,58 @@ from cubesip.request import Request
 
 log = logging.getLogger(__name__)
 
-DATASET = "ortho_hr"
 CRS_RD = "EPSG:28992"
+# Folder of the tile indexes the download portal loads (it redirects to object storage).
 INDEX_BASE = "https://basisdata.nl/hwh-portal/20230609_tmp/links/nationaal/Nederland"
 INDEX_MAX_AGE_S = 7 * 24 * 3600
-TILE_M = 1000.0
-DEFAULT_RESOLUTION = 0.08
+GRID_UNIT_M = 1000.0  # every tile edge is on a whole kilometre
+
+
+@dataclass(frozen=True)
+class Mosaic:
+    """One orthophoto mosaic published by Beeldmateriaal."""
+
+    name: str
+    description: str
+    resolution: float  # metres
+    season: str
+    # Index names to try, in order, for a year and product (RGB or CIR).
+    index_patterns: tuple[str, ...]
+    hint: str  # shown when a year or product has no index
+
+    def index_names(self, year: int, product: str) -> list[str]:
+        """Candidate index names for one year and product. A pattern without the product in its
+        name is an RGB-only index, so it is skipped for CIR.
+        """
+        return [
+            p.format(year=year, product=product)
+            for p in self.index_patterns
+            if "{product}" in p or product == "RGB"
+        ]
+
+
+MOSAICS = {
+    "ortho_hr": Mosaic(
+        name="ortho_hr",
+        description="high resolution (8 cm), spring flight",
+        resolution=0.08,
+        season="spring",
+        # 2025 onwards: one index per product; 2021-2024: one RGB-only index.
+        index_patterns=("BM_HRL{year}O_{product}_TIF", "BM_HRL{year}O_TIF"),
+        hint=(
+            "8 cm RGB tiles are published from 2021 and 8 cm near-infrared (CIR) from 2025; "
+            "for near-infrared before 2025 use dataset 'ortho_lr' (25 cm, summer, from 2022)"
+        ),
+    ),
+    "ortho_lr": Mosaic(
+        name="ortho_lr",
+        description="low resolution (25 cm), summer flight",
+        resolution=0.25,
+        season="summer",
+        index_patterns=("BM_LRL{year}O_{product}",),
+        hint="25 cm RGB and near-infrared (CIR) tiles are published from 2022",
+    ),
+}
 # Which product holds each variable, and at which (1-based) band.
 BANDS = {
     "RGB": {"red": 1, "green": 2, "blue": 3},
@@ -92,11 +142,19 @@ GDAL_ENV = {
 
 @dataclass(frozen=True)
 class Tile:
-    """One 1 x 1 km GeoTIFF: its lower-left corner in RD metres and its URL."""
+    """One GeoTIFF tile: its edges in RD metres and its URL."""
 
-    x0: int
-    y0: int
+    west: int
+    south: int
+    east: int
+    north: int
     url: str
+
+    def overlap(self, bounds: tuple[float, float, float, float]) -> float:
+        """Area (m²) the tile shares with the bounds (west, south, east, north)."""
+        width = min(self.east, bounds[2]) - max(self.west, bounds[0])
+        height = min(self.north, bounds[3]) - max(self.south, bounds[1])
+        return max(width, 0.0) * max(height, 0.0)
 
 
 @dataclass(frozen=True)
@@ -108,6 +166,11 @@ class Grid:
     east: float
     north: float
     resolution: float
+
+    @property
+    def bounds(self) -> tuple[float, float, float, float]:
+        """(west, south, east, north)."""
+        return self.west, self.south, self.east, self.north
 
     @property
     def width(self) -> int:
@@ -127,7 +190,7 @@ class BeeldmateriaalDriver(Driver):
     def __init__(self, config) -> None:
         """Set up the driver with an empty memory of tile indexes already read."""
         super().__init__(config)
-        self._indexes: dict[tuple[int, str], dict[tuple[int, int], Tile]] = {}
+        self._indexes: dict[tuple[str, int, str], list[Tile]] = {}
 
     @property
     def backend_url(self) -> str:
@@ -144,14 +207,11 @@ class BeeldmateriaalDriver(Driver):
         return dataset.strip().lower()
 
     def validate(self, request: Request) -> None:
-        """Refuse requests this driver cannot serve: an unknown dataset or variable, a time range
-        that is not whole calendar years, or a resolution that does not divide a 1 km tile.
+        """Refuse requests this driver cannot serve: an unknown dataset, a time range that is
+        not whole calendar years, or a resolution that does not divide a kilometre.
         """
         super().validate(request)
-        if self.dataset_key(request.dataset) != DATASET:
-            raise ValueError(
-                f"unknown beeldmateriaal dataset {request.dataset!r}; available: {DATASET!r}"
-            )
+        mosaic(request)
         time_ = request.time
         if (
             time_ is None
@@ -160,7 +220,7 @@ class BeeldmateriaalDriver(Driver):
         ):
             raise ValueError(
                 "Beeldmateriaal orthophotos are flown once a year: give time as whole calendar "
-                "years, e.g. {'start': '2025-01-01', 'end': '2025-12-31'}"
+                "years, e.g. {'start': '2024-01-01', 'end': '2024-12-31'}"
             )
         resolution(request)
 
@@ -170,17 +230,22 @@ class BeeldmateriaalDriver(Driver):
         """Folder where the tile indexes are kept."""
         return Path(self.config.data_dir) / "_index"
 
-    def tiles(self, year: int, product: str) -> dict[tuple[int, int], Tile]:
-        """The tiles of one year and product, keyed by lower-left corner. Raises
-        DatasetNotFoundError when the portal has no tile index for that year.
+    def tiles(self, mosaic_: Mosaic, year: int, product: str) -> list[Tile]:
+        """The tiles of one mosaic, year and product. Raises DatasetNotFoundError when the
+        portal has no tile index for them.
         """
-        key = (year, product)
+        key = (mosaic_.name, year, product)
         if key not in self._indexes:
-            path = self.index_dir() / f"{index_name(year, product)}.csv"
-            fresh = path.is_file() and time.time() - path.stat().st_mtime < INDEX_MAX_AGE_S
-            if not fresh:
+            path = self.index_dir() / f"beeldmateriaal_{mosaic_.name}_{year}_{product}.csv"
+            recent = year >= date.today().year - 1
+            stale = (
+                not path.is_file()
+                or recent
+                and time.time() - path.stat().st_mtime > INDEX_MAX_AGE_S
+            )
+            if stale:
                 try:
-                    features = download_index(year, product)
+                    features = download_index(mosaic_, year, product)
                 except DatasetNotFoundError:
                     if not path.is_file():
                         raise
@@ -193,7 +258,9 @@ class BeeldmateriaalDriver(Driver):
     # -- check ------------------------------------------------------------------------
 
     def describe(self, request: Request) -> DatasetInfo:
-        """Check that every requested year has tiles, and report missing tiles as notes."""
+        """Check that every requested year has tiles over the geohash, and report the share of
+        the area without tiles as a note.
+        """
         info = DatasetInfo(
             dataset=self.dataset_key(request.dataset),
             available_variables=list(VARIABLES),
@@ -202,20 +269,21 @@ class BeeldmateriaalDriver(Driver):
         )
         if info.missing_variables:
             return info
-        corners = tile_corners(rd_bounds(request.bbox))
+        mosaic_ = mosaic(request)
+        bounds = output_grid(request.bbox, resolution(request)).bounds
+        area = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1])
         for year in years(request):
             for product in products(request.variables):
-                found = self.tiles(year, product)
-                missing = [c for c in corners if c not in found]
-                if len(missing) == len(corners):
+                covered = sum(t.overlap(bounds) for t in self.tiles(mosaic_, year, product))
+                if covered <= 0:
                     raise ValueError(
-                        f"no {product} tiles for {year} at {request.geohash}: outside the "
-                        "Netherlands or not delivered yet"
+                        f"no {mosaic_.name} {product} tiles for {year} at {request.geohash}: "
+                        "outside the Netherlands or not delivered yet"
                     )
-                if missing:
+                if covered < area * 0.999:
                     info.notes.append(
-                        f"{len(missing)} of {len(corners)} {product} tiles missing for {year} "
-                        "(sea or not delivered yet): those pixels will be 0"
+                        f"{100 * (1 - covered / area):.0f}% of the area has no {product} tile "
+                        f"for {year} (sea or not delivered yet): those pixels will be 0"
                     )
         return info
 
@@ -238,18 +306,19 @@ class BeeldmateriaalDriver(Driver):
         """Read the requested window of every tile the geohash overlaps, for each year and each
         product needed, mosaic them on the output grid and save the result as NetCDF.
         """
+        mosaic_ = mosaic(request)
         grid = output_grid(request.bbox, resolution(request))
-        corners = tile_corners((grid.west, grid.south, grid.east, grid.north))
         sources = band_sources(request.variables)
         shape = (len(years(request)), grid.height, grid.width)
         data = {v: np.zeros(shape, "uint8") for v in sources}
         used: list[str] = []
         for t, year in enumerate(years(request)):
             for product, wanted in group_by_product(sources).items():
-                index = self.tiles(year, product)
-                tiles = [index[c] for c in corners if c in index]
+                index = self.tiles(mosaic_, year, product)
+                tiles = [tile for tile in index if tile.overlap(grid.bounds) > 0]
                 log.info(
-                    "Beeldmateriaal %s %d: reading %d tile(s) for %s",
+                    "Beeldmateriaal %s %s %d: reading %d tile(s) for %s",
+                    mosaic_.name,
                     product,
                     year,
                     len(tiles),
@@ -262,7 +331,7 @@ class BeeldmateriaalDriver(Driver):
                     used.append(tile.url)
         if not used:
             raise EmptyResultError(f"no Beeldmateriaal tiles at {request.geohash}")
-        ds = orthophoto_dataset(data, years(request), grid)
+        ds = orthophoto_dataset(data, years(request), grid, mosaic_)
         attrs = provenance_attrs(request, self.dataset_key(request.dataset), self.backend_url)
         attrs["source_tiles"] = "\n".join(sorted(set(used)))
         attrs["license"] = "CC BY 4.0, Beeldmateriaal Nederland (https://www.beeldmateriaal.nl)"
@@ -272,6 +341,17 @@ class BeeldmateriaalDriver(Driver):
 # -- request helpers ----------------------------------------------------------------------
 
 
+def mosaic(request: Request) -> Mosaic:
+    """The mosaic named by the request's dataset. Raises ValueError for an unknown one."""
+    key = request.dataset.strip().lower()
+    if key not in MOSAICS:
+        available = ", ".join(f"{m.name!r} ({m.description})" for m in MOSAICS.values())
+        raise ValueError(
+            f"unknown beeldmateriaal dataset {request.dataset!r}; available: {available}"
+        )
+    return MOSAICS[key]
+
+
 def years(request: Request) -> list[int]:
     """The calendar years covered by the request."""
     assert request.time is not None  # validate() requires it
@@ -279,17 +359,17 @@ def years(request: Request) -> list[int]:
 
 
 def resolution(request: Request) -> float:
-    """The output pixel size in metres (option 'resolution', default 0.08). Raises ValueError
-    unless it is positive and divides a 1 km tile into a whole number of pixels.
+    """The output pixel size in metres (option 'resolution', default the mosaic's own). Raises
+    ValueError unless it is positive and divides a kilometre into a whole number of pixels.
     """
-    value = request.options.get("resolution", DEFAULT_RESOLUTION)
+    value = request.options.get("resolution", mosaic(request).resolution)
     if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
         raise ValueError("options.resolution must be a positive number of metres")
-    per_tile = TILE_M / value
-    if abs(per_tile - round(per_tile)) > 1e-6:
+    per_km = GRID_UNIT_M / value
+    if abs(per_km - round(per_km)) > 1e-6:
         raise ValueError(
-            f"options.resolution {value} does not divide a 1 km tile into whole pixels "
-            "(use e.g. 0.05, 0.08, 0.1, 0.25, 1)"
+            f"options.resolution {value} does not divide a kilometre into whole pixels "
+            "(use e.g. 0.05, 0.08, 0.1, 0.25, 0.5, 1)"
         )
     return float(value)
 
@@ -351,22 +431,14 @@ def output_grid(box: BBox, res: float) -> Grid:
     )
 
 
-def tile_corners(bounds: tuple[float, float, float, float]) -> list[tuple[int, int]]:
-    """Lower-left corners (RD metres) of the 1 km tiles that overlap the bounds."""
-    west, south, east, north = bounds
-    xs = range(int(math.floor(west / TILE_M)), int(math.ceil(east / TILE_M)))
-    ys = range(int(math.floor(south / TILE_M)), int(math.ceil(north / TILE_M)))
-    return [(int(x * TILE_M), int(y * TILE_M)) for y in ys for x in xs]
-
-
 def tile_slices(tile: Tile, grid: Grid) -> tuple[tuple[slice, slice], tuple[float, ...]]:
     """Where a tile lands on the output grid: the (rows, cols) slices, and the RD bounds of
     the overlap (west, south, east, north) to read from the tile.
     """
-    west = max(grid.west, tile.x0)
-    east = min(grid.east, tile.x0 + TILE_M)
-    south = max(grid.south, tile.y0)
-    north = min(grid.north, tile.y0 + TILE_M)
+    west = max(grid.west, tile.west)
+    east = min(grid.east, tile.east)
+    south = max(grid.south, tile.south)
+    north = min(grid.north, tile.north)
     res = grid.resolution
     col0 = round((west - grid.west) / res)
     col1 = round((east - grid.west) / res)
@@ -404,7 +476,9 @@ def read_tiles(tiles: list[Tile], grid: Grid, bands: list[int]):
         yield from pool.map(read_one, tiles)
 
 
-def orthophoto_dataset(data: dict[str, np.ndarray], years_: list[int], grid: Grid) -> xr.Dataset:
+def orthophoto_dataset(
+    data: dict[str, np.ndarray], years_: list[int], grid: Grid, mosaic_: Mosaic
+) -> xr.Dataset:
     """Wrap the per-variable arrays (time, y, x) into a dataset with pixel-centre RD coordinates
     and the CRS recorded.
     """
@@ -434,75 +508,74 @@ def orthophoto_dataset(data: dict[str, np.ndarray], years_: list[int], grid: Gri
             "spatial_ref": ((), 0, grid_mapping),
         },
     )
-    ds["time"].attrs["long_name"] = "flight year (spring flight, stamped on 1 January)"
+    ds["time"].attrs["long_name"] = f"flight year ({mosaic_.season} flight, stamped on 1 January)"
     ds["x"].attrs.update(standard_name="projection_x_coordinate", units="m")
     ds["y"].attrs.update(standard_name="projection_y_coordinate", units="m")
+    ds.attrs["beeldmateriaal_mosaic"] = f"{mosaic_.name}: {mosaic_.description}"
     return ds
 
 
 # -- tile index ---------------------------------------------------------------------------
 
 
-def index_name(year: int, product: str) -> str:
-    """Name of the portal's tile index for one year and product, e.g. BM_HRL2025O_CIR_TIF."""
-    return f"BM_HRL{year}O_{product}_TIF"
-
-
-def download_index(year: int, product: str) -> list[dict]:
-    """Download the GeoJSON tile index of one year and product and return its features. Raises
-    DatasetNotFoundError when the portal has none (it answers 403 for unknown files).
+def download_index(mosaic_: Mosaic, year: int, product: str) -> list[dict]:
+    """Download the GeoJSON tile index of one mosaic, year and product and return its
+    features, trying the portal's index names in turn. Raises DatasetNotFoundError when none
+    exists (the portal answers 403 for unknown files).
     """
-    url = f"{INDEX_BASE}/{index_name(year, product)}.json"
-    log.info("downloading the Beeldmateriaal tile index %s", url)
-    response = requests.get(url, timeout=300)
-    if response.status_code in (403, 404):
-        raise DatasetNotFoundError(
-            f"no Beeldmateriaal {product} orthophoto tiles published for {year} ({url})"
-        )
-    response.raise_for_status()
-    return response.json().get("features", [])
-
-
-_TILE_NAME = re.compile(r"[/\\]\d{4}_\d+_\d+_(RGB|CIR)(_JPEG)?_hrl\.tif$")
+    for name in mosaic_.index_names(year, product):
+        url = f"{INDEX_BASE}/{name}.json"
+        response = requests.get(url, timeout=300)
+        if response.status_code in (403, 404):
+            continue
+        response.raise_for_status()
+        log.info("downloaded the Beeldmateriaal tile index %s", url)
+        return response.json().get("features", [])
+    raise DatasetNotFoundError(
+        f"no Beeldmateriaal {mosaic_.name} {product} tiles published for {year}: {mosaic_.hint}"
+    )
 
 
 def select_tiles(features: list[dict]) -> list[Tile]:
-    """Pick one GeoTIFF per 1 km tile from the index features.
+    """Pick one GeoTIFF per tile footprint from the index features.
 
-    The index also lists sidecar files (.aux.xml), and about 2% of the tiles appear twice,
-    from two neighbouring flight blocks. For those the most recently modified file is kept
-    (then the larger one, then the URL, so the choice is always the same).
+    The indexes also list sidecar files (.aux.xml, .tfw), and 1-2% of the high-resolution
+    tiles appear twice, from two neighbouring flight blocks. For those the most recently
+    modified file is kept (then the larger one, then the URL, so the choice is always the
+    same).
     """
-    best: dict[tuple[int, int], tuple[tuple, Tile]] = {}
+    best: dict[tuple[int, int, int, int], tuple[tuple, Tile]] = {}
     for feature in features:
         props = feature.get("properties") or {}
         url = props.get("file", "")
-        if not _TILE_NAME.search(url):
+        if not url.lower().endswith((".tif", ".tiff")):
             continue
         ring = feature["geometry"]["coordinates"][0]
-        x0 = int(round(min(p[0] for p in ring)))
-        y0 = int(round(min(p[1] for p in ring)))
+        xs, ys = [p[0] for p in ring], [p[1] for p in ring]
+        footprint = (round(min(xs)), round(min(ys)), round(max(xs)), round(max(ys)))
         rank = (props.get("mtime", ""), props.get("size", 0), url)
-        tile = Tile(x0, y0, url)
-        if (x0, y0) not in best or rank > best[(x0, y0)][0]:
-            best[(x0, y0)] = (rank, tile)
-    return [tile for _, tile in sorted(best.values(), key=lambda item: (item[1].x0, item[1].y0))]
+        if footprint not in best or rank > best[footprint][0]:
+            best[footprint] = (rank, Tile(*footprint, url))
+    return [tile for _, tile in sorted(best.values(), key=lambda item: item[1].url)]
 
 
 def write_index_csv(path: Path, tiles: list[Tile]) -> None:
-    """Save the selected tiles as a CSV (x0, y0, url), replacing the file atomically."""
+    """Save the selected tiles as a CSV (west, south, east, north, url), replacing the file
+    atomically.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     with tmp.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["x0", "y0", "url"])
-        writer.writerows((t.x0, t.y0, t.url) for t in tiles)
+        writer.writerow(["west", "south", "east", "north", "url"])
+        writer.writerows((t.west, t.south, t.east, t.north, t.url) for t in tiles)
     tmp.replace(path)
 
 
-def read_index_csv(path: Path) -> dict[tuple[int, int], Tile]:
-    """Read a tile CSV written by write_index_csv, keyed by lower-left corner."""
+def read_index_csv(path: Path) -> list[Tile]:
+    """Read a tile CSV written by write_index_csv."""
     with path.open(newline="", encoding="utf-8") as fh:
-        rows = csv.DictReader(fh)
-        tiles = (Tile(int(r["x0"]), int(r["y0"]), r["url"]) for r in rows)
-        return {(t.x0, t.y0): t for t in tiles}
+        return [
+            Tile(int(r["west"]), int(r["south"]), int(r["east"]), int(r["north"]), r["url"])
+            for r in csv.DictReader(fh)
+        ]

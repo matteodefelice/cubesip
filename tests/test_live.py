@@ -160,3 +160,22 @@ def test_beeldmateriaal_orthophoto(config, tmp_path: Path) -> None:
     assert int((ds["nir"] > 0).sum()) > 0
     assert result.manifest_rows[0]["crs"] == "EPSG:28992"
     assert cubesip.run({**request, "geohash": "u178kdck"}, cfg).from_cache
+
+
+def test_beeldmateriaal_older_years(config, tmp_path: Path) -> None:
+    """8 cm RGB before 2025 (RGB-only index) and 25 cm RGB + near-infrared, both 2024."""
+    cfg = _isolated(config, tmp_path).model_copy(update={"data_dir": tmp_path})
+    base = {
+        "driver": "beeldmateriaal",
+        "geohash": "u177rxt",  # inside the RD tile 122000_518000
+        "time": {"start": "2024-01-01", "end": "2024-12-31"},
+        "target_dir": str(tmp_path),
+    }
+    hr = cubesip.run({**base, "dataset": "ortho_hr", "variables": ["red", "blue"]}, cfg)
+    assert float(hr.dataset["x"][1] - hr.dataset["x"][0]) == pytest.approx(0.08)
+    assert int((hr.dataset["red"] > 0).sum()) > 0
+    lr = cubesip.run({**base, "dataset": "ortho_lr", "variables": ["nir", "red"]}, cfg)
+    assert float(lr.dataset["x"][1] - lr.dataset["x"][0]) == pytest.approx(0.25)
+    assert float(lr.dataset["nir"].mean()) > float(lr.dataset["red"].mean())  # vegetation
+    report = cubesip.check({**base, "dataset": "ortho_hr", "variables": ["nir"]}, cfg)
+    assert not report.ok and "ortho_lr" in report.error

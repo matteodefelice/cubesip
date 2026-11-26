@@ -46,6 +46,16 @@ JPEG only, max 2500 px. Verified live: `u178kdc` (Utrecht), 2025, 4 variables,
 1185x1915 px, pixels identical to a direct read of the tile, ~6 s plus ~15 s for the two
 index downloads the first time; a child geohash is served from the cache.
 
+**Beeldmateriaal years and 25 cm (2026-11-26):** the first version only knew the 2025+
+index name, so 2024 was "not found". The portal uses three index names: 8 cm 2025+
+`BM_HRL{year}O_{RGB|CIR}_TIF`, 8 cm 2021-2024 `BM_HRL{year}O_TIF` (RGB only), 25 cm summer
+2022+ `BM_LRL{year}O_{RGB|CIR}` (4 x 4 km tiles on a grid offset by 2 km). `dataset` now
+picks the mosaic: `ortho_hr` (8 cm) or `ortho_lr` (25 cm); the driver tries the index names
+in turn and finds tiles by footprint overlap instead of 1 km corner arithmetic. Same tile
+format everywhere (3-band uint8 JPEG, 256 px blocks); 25 cm CIR is also NIR, red, green.
+Verified live at RD 122500, 517500 (`u177rxt`), 2024: 8 cm RGB 1175x1919 px, 25 cm RGB + NIR
+377x615 px, and a clear refusal of 8 cm NIR for 2024 pointing to `ortho_lr`.
+
 ## 1. Decisions
 
 ### Agreed with the user (2026-11-18)
@@ -101,7 +111,7 @@ src/cubesip/
                          CDSEFederationDriver (load_collection)
   drivers/stac.py        StacDriver (load_stac on the back-end named by stac.backend)
   drivers/tessera.py     TesseraDriver (TESSERA embeddings via geotessera, optional extra)
-  drivers/beeldmateriaal.py  BeeldmateriaalDriver (Dutch 8 cm orthophoto GeoTIFF tiles)
+  drivers/beeldmateriaal.py  BeeldmateriaalDriver (Dutch 8 / 25 cm orthophoto GeoTIFF tiles)
 tests/                   offline suite; test_live.py runs only with -m live
 ```
 

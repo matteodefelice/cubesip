@@ -1,5 +1,6 @@
-"""Beeldmateriaal driver, offline: small local GeoTIFFs stand in for the 1 km orthophoto tiles,
-and a fake index download lists them.
+"""Beeldmateriaal driver, offline: small local GeoTIFFs stand in for the orthophoto tiles
+(1 km for ortho_hr, 4 km on a grid offset by 2 km for ortho_lr), and a fake index download
+lists them.
 """
 
 from __future__ import annotations
@@ -24,13 +25,16 @@ GEOHASH = "u178kdc"  # Utrecht centre, inside the RD tile 136000_455000
 RES = 10.0  # tests use 10 m pixels so a 1 km tile is only 100 x 100
 
 
-def _write_tile(folder: Path, year: int, product: str, x0: int, y0: int, res: float = RES) -> str:
+def _write_tile(
+    folder: Path, year: int, product: str, x0: int, y0: int, tile_m: int = 1000, res: float = RES
+) -> str:
     """A 3-band GeoTIFF tile; band b holds 10*b + (year - 2020), so tests can tell bands, years
-    and products apart (CIR adds 100).
+    and products apart (CIR adds 100, 4 km tiles add 50).
     """
-    size = round(bm.TILE_M / res)
-    path = folder / f"{year}_{x0:06d}_{y0:06d}_{product}_JPEG_hrl.tif"
-    offset = 100 if product == "CIR" else 0
+    size = round(tile_m / res)
+    kind = "hrl" if tile_m == 1000 else "lrl"
+    path = folder / f"{year}_{x0:06d}_{y0:06d}_{product}_{kind}.tif"
+    offset = (100 if product == "CIR" else 0) + (50 if tile_m != 1000 else 0)
     data = np.stack(
         [np.full((size, size), offset + 10 * b + (year - 2020), "uint8") for b in (1, 2, 3)]
     )
@@ -43,14 +47,17 @@ def _write_tile(folder: Path, year: int, product: str, x0: int, y0: int, res: fl
         count=3,
         dtype="uint8",
         crs=bm.CRS_RD,
-        transform=from_origin(x0, y0 + bm.TILE_M, res, res),
+        transform=from_origin(x0, y0 + tile_m, res, res),
     ) as dst:
         dst.write(data)
     return str(path)
 
 
-def _feature(url: str, x0: int, y0: int, mtime: str = "2025-07-01", size: int = 1) -> dict:
-    ring = [[x0, y0], [x0 + 1000, y0], [x0 + 1000, y0 + 1000], [x0, y0 + 1000], [x0, y0]]
+def _feature(
+    url: str, x0: int, y0: int, mtime: str = "2025-07-01", size: int = 1, tile_m: int = 1000
+) -> dict:
+    x1, y1 = x0 + tile_m, y0 + tile_m
+    ring = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
     return {
         "properties": {"file": url, "size": size, "mtime": mtime},
         "geometry": {"type": "Polygon", "coordinates": [ring]},
@@ -58,21 +65,31 @@ def _feature(url: str, x0: int, y0: int, mtime: str = "2025-07-01", size: int = 
 
 
 @pytest.fixture
-def tiles(tmp_path: Path) -> dict[tuple[int, str], list[dict]]:
-    """Tiles around the geohash for 2025 and 2026; 2026 lacks the CIR tile at 137000."""
+def tiles(tmp_path: Path) -> dict[tuple[str, int, str], list[dict]]:
+    """Index features around the geohash, as published: ortho_hr RGB 2024 (no CIR before
+    2025), RGB + CIR 2025 and 2026 (2026 lacks the CIR tile at 137000); ortho_lr RGB + CIR
+    2024 in 4 km tiles on the grid offset by 2 km.
+    """
     folder = tmp_path / "tiles"
     folder.mkdir()
-    index: dict[tuple[int, str], list[dict]] = {}
-    for year in (2025, 2026):
-        for product in ("RGB", "CIR"):
-            feats = []
-            for x0 in (135000, 136000, 137000):
-                for y0 in (454000, 455000, 456000):
-                    if (year, product, x0) == (2026, "CIR", 137000):
-                        continue
-                    url = _write_tile(folder, year, product, x0, y0)
-                    feats += [_feature(url, x0, y0), _feature(url + ".aux.xml", x0, y0)]
-            index[(year, product)] = feats
+    index: dict[tuple[str, int, str], list[dict]] = {}
+    hr = [(2024, "RGB"), (2025, "RGB"), (2025, "CIR"), (2026, "RGB"), (2026, "CIR")]
+    for year, product in hr:
+        feats = []
+        for x0 in (135000, 136000, 137000):
+            for y0 in (454000, 455000, 456000):
+                if (year, product, x0) == (2026, "CIR", 137000):
+                    continue
+                url = _write_tile(folder, year, product, x0, y0)
+                feats += [_feature(url, x0, y0), _feature(url + ".aux.xml", x0, y0)]
+        index[("ortho_hr", year, product)] = feats
+    for product in ("RGB", "CIR"):
+        feats = []
+        for x0 in (130000, 134000, 138000):
+            for y0 in (450000, 454000, 458000):
+                url = _write_tile(folder, 2024, product, x0, y0, tile_m=4000)
+                feats.append(_feature(url, x0, y0, tile_m=4000))
+        index[("ortho_lr", 2024, product)] = feats
     return index
 
 
@@ -80,11 +97,11 @@ def tiles(tmp_path: Path) -> dict[tuple[int, str], list[dict]]:
 def downloads(monkeypatch: pytest.MonkeyPatch, tiles) -> list[tuple[int, str]]:
     calls: list[tuple[int, str]] = []
 
-    def fake_download(year: int, product: str) -> list[dict]:
+    def fake_download(mosaic: bm.Mosaic, year: int, product: str) -> list[dict]:
         calls.append((year, product))
-        if (year, product) not in tiles:
-            raise bm.DatasetNotFoundError(f"no {product} tiles for {year}")
-        return tiles[(year, product)]
+        if (mosaic.name, year, product) not in tiles:
+            raise bm.DatasetNotFoundError(f"no {mosaic.name} {product} tiles for {year}")
+        return tiles[(mosaic.name, year, product)]
 
     monkeypatch.setattr(bm, "download_index", fake_download)
     return calls
@@ -131,6 +148,7 @@ def test_check_run_and_cache(config: Config, downloads, tmp_path: Path) -> None:
     assert report.size.nbytes == ds["red"].size + ds["nir"].size
     assert result.manifest_rows[0]["crs"] == "EPSG:28992"
     assert "136000_455000_CIR" in ds.attrs["source_tiles"]
+    assert "spring" in ds["time"].attrs["long_name"]
     assert downloads == [(2025, "CIR")]  # index read from the CSV, not downloaded again
 
     child = cubesip.run(_request(tmp_path, geohash=GEOHASH + "k"), config)
@@ -154,11 +172,11 @@ def test_two_years_and_missing_tile(config: Config, tmp_path: Path) -> None:
     )
     report = cubesip.check(req, config)
     assert report.ok, report.summary()
-    assert any("tiles missing for 2026" in w for w in report.warnings)
+    assert any("has no CIR tile for 2026" in w for w in report.warnings)
     ds = cubesip.run(req, config).dataset
     assert ds.sizes["time"] == 2
     nir25, nir26 = ds["nir"].isel(time=0).values, ds["nir"].isel(time=1).values
-    assert set(np.unique(nir25)) <= {115, 0} and (nir25 == 115).all()
+    assert (nir25 == 115).all()
     east = ds["x"].values >= 137000
     assert (nir26[:, east] == 0).all() and (nir26[:, ~east] == 116).all()
 
@@ -169,21 +187,53 @@ def test_coarser_resolution_averages(config: Config, tmp_path: Path) -> None:
     assert set(np.unique(ds["nir"].values)) == {115}
 
 
+def test_hr_rgb_before_2025(config: Config, tmp_path: Path) -> None:
+    req = _request(
+        tmp_path, variables=["red", "blue"], time={"start": "2024-01-01", "end": "2024-12-31"}
+    )
+    ds = cubesip.run(req, config).dataset
+    assert [int(ds[v].max()) for v in ("red", "blue")] == [14, 34]
+    # 8 cm near-infrared only exists from 2025
+    report = cubesip.check({**req, "variables": ["nir"]}, config)
+    assert not report.ok and "CIR" in report.error
+
+
+def test_lr_mosaic_on_offset_grid(config: Config, tmp_path: Path) -> None:
+    # u178kd lies inside the 4 km tile 134000-138000 of the grid offset by 2 km, which the
+    # 1 km corner arithmetic of ortho_hr would not find
+    req = _request(
+        tmp_path,
+        dataset="ortho_lr",
+        geohash="u178kd",
+        variables=["nir", "red"],
+        time={"start": "2024-01-01", "end": "2024-12-31"},
+    )
+    report = cubesip.check(req, config)
+    assert report.ok, report.summary()
+    assert report.warnings == []
+    ds = cubesip.run(req, config).dataset
+    assert set(np.unique(ds["nir"].values)) == {164}
+    assert set(np.unique(ds["red"].values)) == {174}
+    assert "ortho_lr" in ds.attrs["beeldmateriaal_mosaic"]
+    assert "summer" in ds["time"].attrs["long_name"]
+    assert ds.attrs["source_tiles"].endswith("2024_134000_454000_CIR_lrl.tif")
+
+
 def test_outside_netherlands(config: Config, tmp_path: Path) -> None:
     report = cubesip.check(_request(tmp_path, geohash="u0nd9w"), config)
     assert not report.ok and "outside the Netherlands" in report.error
 
 
 def test_year_without_index(config: Config, tmp_path: Path) -> None:
-    req = _request(tmp_path, time={"start": "2024-01-01", "end": "2024-12-31"})
+    req = _request(tmp_path, time={"start": "2020-01-01", "end": "2020-12-31"})
     report = cubesip.check(req, config)
-    assert not report.ok and "2024" in report.error
+    assert not report.ok and "2020" in report.error
 
 
 @pytest.mark.parametrize(
     ("extra", "message"),
     [
-        ({"dataset": "ortho_lr"}, "unknown beeldmateriaal dataset"),
+        ({"dataset": "ortho_xl"}, "unknown beeldmateriaal dataset"),
         ({"time": {"start": "2025-03-01", "end": "2025-12-31"}}, "whole calendar years"),
         ({"time": None}, "whole calendar years"),
         ({"options": {"resolution": 0.3}}, "does not divide"),
@@ -211,6 +261,44 @@ def test_empty_result(config: Config, tmp_path: Path) -> None:
 # -- pure helpers --------------------------------------------------------------------------
 
 
+def test_default_resolution_follows_the_mosaic(tmp_path: Path) -> None:
+    base = _request(tmp_path, options={})
+    assert bm.resolution(Request.model_validate(base)) == 0.08
+    assert bm.resolution(Request.model_validate({**base, "dataset": "ortho_lr"})) == 0.25
+
+
+def test_download_index_tries_the_older_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked: list[str] = []
+    features = [{"properties": {"file": "a.tif"}}]
+
+    class Response:
+        def __init__(self, status: int) -> None:
+            self.status_code = status
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {"features": features}
+
+    def fake_get(url: str, timeout: float) -> Response:
+        name = url.rsplit("/", 1)[1]
+        asked.append(name)
+        return Response(200 if name in ("BM_HRL2024O_TIF.json", "BM_LRL2024O_CIR.json") else 403)
+
+    monkeypatch.setattr(bm.requests, "get", fake_get)
+    hr = bm.MOSAICS["ortho_hr"]
+    assert bm.download_index(hr, 2024, "RGB") == features
+    assert asked == ["BM_HRL2024O_RGB_TIF.json", "BM_HRL2024O_TIF.json"]
+    asked.clear()
+    with pytest.raises(bm.DatasetNotFoundError, match="ortho_lr"):
+        bm.download_index(hr, 2024, "CIR")
+    assert asked == ["BM_HRL2024O_CIR_TIF.json"]  # the RGB-only index is not tried for CIR
+    asked.clear()
+    assert bm.download_index(bm.MOSAICS["ortho_lr"], 2024, "CIR") == features
+    assert asked == ["BM_LRL2024O_CIR.json"]
+
+
 def test_band_sources() -> None:
     assert bm.band_sources(["nir", "red"]) == {"nir": "CIR", "red": "CIR"}
     assert bm.band_sources(["red", "green"]) == {"red": "RGB", "green": "RGB"}
@@ -221,23 +309,20 @@ def test_select_tiles_skips_sidecars_and_picks_one_duplicate() -> None:
     base = "https://x/2025/Ortho/{b}/beelden_RGB_jpeg_tegels/2025_{x}_455000_RGB_JPEG_hrl.tif"
     old = base.format(b="1/1", x="057000")
     new = base.format(b="8/1", x="57000")
+    lower = "https://x/2021/1/01/beelden_tif_tegels/2021_058000_455000_rgb_hrl.tif"
     tiles = bm.select_tiles(
         [
             _feature(old, 57000, 455000, mtime="2025-07-16"),
             _feature(old + ".aux.xml", 57000, 455000, mtime="2025-12-01"),
+            _feature(old.replace(".tif", ".tfw"), 57000, 455000, mtime="2025-12-01"),
             _feature(new, 57000, 455000, mtime="2025-10-03"),
-            _feature(
-                "https://x/2025/Ortho/5/6/beelden_RGB_tif_tegels/2025_058000_455000_RGB_hrl.tif",
-                58000,
-                455000,
-            ),
+            _feature(lower, 58000, 455000),
         ]
     )
-    assert [(t.x0, t.y0, t.url) for t in tiles] == [
-        (57000, 455000, new),
-        (58000, 455000, tiles[1].url),
+    assert sorted((t.west, t.south, t.east, t.north, t.url) for t in tiles) == [
+        (57000, 455000, 58000, 456000, new),
+        (58000, 455000, 59000, 456000, lower),
     ]
-    assert tiles[1].url.endswith("_RGB_hrl.tif")
 
 
 def test_output_grid_snaps_to_tile_edges() -> None:
@@ -251,8 +336,10 @@ def test_output_grid_snaps_to_tile_edges() -> None:
         }
     )
     grid = bm.output_grid(req.bbox, 0.08)
-    for edge in (grid.west, grid.south, grid.east, grid.north):
+    for edge in grid.bounds:
         assert abs(edge / 0.08 - round(edge / 0.08)) < 1e-6
-    assert bm.tile_corners((grid.west, grid.south, grid.east, grid.north)) == [(136000, 455000)]
-    (rows, cols), _ = bm.tile_slices(bm.Tile(136000, 455000, ""), grid)
+    tile = bm.Tile(136000, 455000, 137000, 456000, "")
+    area = (grid.east - grid.west) * (grid.north - grid.south)
+    assert tile.overlap(grid.bounds) == pytest.approx(area)
+    (rows, cols), _ = bm.tile_slices(tile, grid)
     assert (rows.stop - rows.start, cols.stop - cols.start) == (grid.height, grid.width)

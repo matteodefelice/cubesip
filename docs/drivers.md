@@ -10,7 +10,7 @@ from.
 | `stac` | STAC collection URL, e.g. Planetary Computer `.../collections/landsat-c2-l2` | any STAC catalogue, read by openEO `load_stac` on the back-end named in `stac.backend` (`openeo` or `cdse_federation`) | `stac` |
 | `edh` | Earth Data Hub dataset path, e.g. `era5/era5-single-levels-atmosphere-v0` | Earth Data Hub Zarr, streamed with xarray | `earthdatahub` |
 | `tessera` | TESSERA store version, e.g. `v1.1` (or a store URL) | [TESSERA](https://github.com/ucam-eo/tessera) embeddings, read with [geotessera](https://github.com/ucam-eo/geotessera)'s Zarr API from the public Source Cooperative stores | none |
-| `beeldmateriaal` | `ortho_hr` | [Beeldmateriaal Nederland](https://www.beeldmateriaal.nl/dataroom) 8 cm aerial orthophotos of the Netherlands (RGB and near-infrared), the open-data GeoTIFF tiles behind PDOK Luchtfoto RGB / CIR, read window by window over HTTP | none |
+| `beeldmateriaal` | `ortho_hr` (8 cm, spring) or `ortho_lr` (25 cm, summer) | [Beeldmateriaal Nederland](https://www.beeldmateriaal.nl/dataroom) aerial orthophotos of the Netherlands (RGB and near-infrared), the open-data GeoTIFF tiles behind PDOK Luchtfoto RGB / CIR, read window by window over HTTP | none |
 | `local` | path to a Zarr store, NetCDF or GeoTIFF | the local file system, read with xarray | none |
 
 ## openEO-based drivers: `openeo`, `cdse_federation`, `stac`
@@ -132,24 +132,30 @@ emb = result.dataset["embedding"]  # float32 (time, band, y, x), native UTM, 10 
 
 ## Beeldmateriaal orthophotos (PDOK Luchtfoto)
 
-Every spring (leafless season) Beeldmateriaal Nederland flies the whole of the Netherlands and
-publishes the orthophoto mosaic as open data (CC BY 4.0), in two products: RGB and
-colour-infrared (CIR, bands near-infrared, red, green). Both are cut into 1 x 1 km GeoTIFF
-tiles in RD New (EPSG:28992) at 8 cm, or 5 cm in some areas. PDOK's *Luchtfoto RGB* and
-*Luchtfoto CIR* WMS/WMTS services show the same imagery, but they only serve JPEG
-renderings, at most 2500 x 2500 px per request. The `beeldmateriaal` driver reads the
-GeoTIFF tiles themselves, and only the part of each tile that the geohash covers. No account
-is needed.
+Beeldmateriaal Nederland flies the whole of the Netherlands twice a year and publishes the
+orthophoto mosaics as open data (CC BY 4.0), as GeoTIFF tiles in RD New (EPSG:28992). Each
+mosaic comes in two products: RGB and colour-infrared (CIR, bands near-infrared, red, green).
+The request's `dataset` picks the mosaic, and with it the resolution and the season:
+
+| `dataset` | Resolution | Flight | Tiles | RGB | Near-infrared (CIR) |
+|---|---|---|---|---|---|
+| `ortho_hr` | 8 cm (5 cm in some areas) | spring, leafless | 1 x 1 km | 2021 onwards | 2025 onwards |
+| `ortho_lr` | 25 cm | summer, leaves on | 4 x 4 km | 2022 onwards | 2022 onwards |
+
+PDOK's *Luchtfoto RGB* and *Luchtfoto CIR* WMS/WMTS services show the same imagery, but they
+only serve JPEG renderings, at most 2500 x 2500 px per request. The `beeldmateriaal` driver
+reads the GeoTIFF tiles themselves, and only the part of each tile that the geohash covers.
+No account is needed.
 
 ```python
 result = cubesip.run(
     {
         "driver": "beeldmateriaal",
-        "dataset": "ortho_hr",
+        "dataset": "ortho_hr",  # 8 cm; "ortho_lr" for 25 cm
         "variables": ["red", "nir"],  # any of red, green, blue, nir
         "geohash": "u178kdc",  # Utrecht, ~150 x 150 m
         "time": {"start": "2025-01-01", "end": "2025-12-31"},  # whole calendar years
-        "options": {"resolution": 0.08},  # optional, metres; the default
+        "options": {"resolution": 0.08},  # optional, metres; default the mosaic's own
     }
 )
 ds = result.dataset  # uint8 (time, y, x) per variable, RD New, 8 cm
@@ -161,24 +167,30 @@ ndvi = (ds["nir"].astype("float32") - ds["red"]) / (ds["nir"].astype("float32") 
   digital numbers as published (JPEG-compressed at quality 95), not reflectances, so an
   NDVI computed from them is a relative index. It is useful within one image, less so
   between years.
-- `time`: whole calendar years, one step per year stamped on 1 January. Tiles are published
-  for 2025 onwards (a year without tiles is refused). Earlier high-resolution years exist
-  only as PDOK web-service images. The tiles of the current year are delivered over several
-  months; `check()` warns about missing tiles, and their pixels are 0.
-- `options.resolution`: output pixel size in metres, default 0.08. It must divide 1 km into
-  whole pixels (0.05, 0.08, 0.1, 0.25, 1, ...). At the tile's own resolution, pixels are
-  copied untouched; otherwise they are averaged (5 cm tiles at the default 0.08). The whole
-  tile window is still read at full resolution, since the tiles have no overviews.
+- `time`: whole calendar years, one step per year stamped on 1 January. A year or product
+  without tiles is refused with the years that exist (see the table); for near-infrared
+  before 2025, use `ortho_lr`. Older 25 cm years (2016-2020) are only published as
+  nationwide ECW mosaics of 100-250 GB in the dataroom, which the driver does not read. The tiles of the
+  current year are delivered over several months; `check()` warns about the share of the
+  area without tiles, and those pixels are 0.
+- `options.resolution`: output pixel size in metres, by default the mosaic's own (0.08 or
+  0.25). It must divide 1 km into whole pixels (0.05, 0.08, 0.1, 0.25, 0.5, 1, ...). At the
+  tile's own resolution, pixels are copied untouched; otherwise they are averaged (5 cm
+  tiles at the default 0.08). The whole tile window is still read at full resolution, since
+  the tiles have no overviews.
 - Grid: RD New, with pixel edges on multiples of the resolution, so cells and years line up
   exactly and a child geohash is cut from the cached file.
 - Size: 8 cm is fine-grained. A level-7 geohash (~150 m) is about 2.3 MB per variable per
-  year, a level-6 one (~1.2 x 0.6 km) about 110 MB. The cube is held in memory before
-  writing, and `check()` warns above 2 GB. For larger areas use a coarser `resolution` or
-  `cubesip.split()`.
-- Tiles are found through the GeoJSON indexes of the [download
-  portal](https://basisdata.nl/hwh-portal/download/index.html), one per year and product
-  (~40 MB each). Each is downloaded once and kept as a small CSV in `<data_dir>/_index/`,
-  refreshed after a week. About 2% of the tiles are listed twice (two neighbouring flight
-  blocks); the most recently modified file is used. The URLs of the tiles read are stored
-  in the NetCDF attribute `source_tiles`.
+  year at 8 cm and 0.23 MB at 25 cm; a level-6 one (~1.2 x 0.6 km) about 110 MB at 8 cm and
+  12 MB at 25 cm. The cube is held in memory before writing, and `check()` warns above
+  2 GB. For larger areas use `ortho_lr`, a coarser `resolution` or `cubesip.split()`.
+- Tiles are found through the GeoJSON indexes that the [download
+  portal](https://basisdata.nl/hwh-portal/download/index.html) loads, one per mosaic, year
+  and product. They list the same tile URLs as the portal's download-as-text option (e.g.
+  `.../hwh-ortho/2024/Ortho/1/09/beelden_tif_tegels/2024_122000_517000_RGB_hrl.tif`). The
+  8 cm indexes are 20-55 MB, the 25 cm ones about 2 MB. Each is downloaded once and kept as
+  a small CSV in `<data_dir>/_index/`; those of the last two years are refreshed after a
+  week. About 2% of the 8 cm tiles are listed twice (two neighbouring flight blocks); the
+  most recently modified file is used. The URLs of the tiles read are stored in the NetCDF
+  attribute `source_tiles`.
 
