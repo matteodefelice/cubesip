@@ -1,7 +1,7 @@
 # Drivers
 
 A request names one driver. The driver decides what `dataset` means and where the data come
-from.
+from. To add a new source, see [writing-a-driver.md](writing-a-driver.md).
 
 | Driver | `dataset` | Data come from | Config section |
 |---|---|---|---|
