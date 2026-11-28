@@ -77,6 +77,18 @@ true colour, false colour and NDVI side by side.
 uv run --group examples python examples/aerial_photo_nl.py
 ```
 
+[examples/hazard_maps.py](examples/hazard_maps.py) reads two global climate hazard maps
+listed in the [Climate Risk STAC](https://climate-risk-data.github.io/climate-risk-stac/)
+with the `url` driver, straight from the zips their publishers serve: JRC river flood depth
+for return periods of 10 to 500 years around Nijmegen (Netherlands), and STORM tropical
+cyclone wind speeds for 10 to 10,000 years at Manila. It turns them into return-period
+curves and saves a chart to `data/`. No account is needed; the first run takes about a
+minute.
+
+```bash
+uv run --group examples python examples/hazard_maps.py
+```
+
 Two scripts in [examples/](examples/) compute a yearly metric for one site. Both make one
 cubesip request per year, write a PNG chart and a CSV table to `data/`, and read the cached
 files instead of downloading when run again. Both default to the same cropland cell in the
