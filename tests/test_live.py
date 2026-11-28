@@ -179,3 +179,50 @@ def test_beeldmateriaal_older_years(config, tmp_path: Path) -> None:
     assert float(lr.dataset["nir"].mean()) > float(lr.dataset["red"].mean())  # vegetation
     report = cubesip.check({**base, "dataset": "ortho_hr", "variables": ["nir"]}, cfg)
     assert not report.ok and "ortho_lr" in report.error
+
+
+JRC_FLOOD_RP100 = (
+    "https://cidportal.jrc.ec.europa.eu/ftp/jrc-opendata/FLOODS/GlobalMaps/"
+    "floodMapGL_rp100y.zip!floodMapGL_rp100y.tif"
+)
+# STORM present-climate wind speeds per return period, one zip on 4TU.ResearchData whose URL
+# has no extension
+STORM_WIND_PRESENT = (
+    "https://data.4tu.nl/file/0ea98bdd-5772-4da8-ae97-99735e891aff/"
+    "0b98c6f5-c7af-45bb-bb6e-dac53e1b8d55"
+)
+
+
+def test_url_jrc_flood_depth(config, tmp_path: Path) -> None:
+    """JRC global river flood depth (100-year return period), read inside the remote zip."""
+    cfg = _isolated(config, tmp_path)
+    request = {
+        "driver": "url",
+        "dataset": JRC_FLOOD_RP100,
+        "variables": ["band_1"],
+        "geohash": "u173",  # Amsterdam and its surroundings
+        "time": None,
+        "target_dir": str(tmp_path),
+    }
+    report = cubesip.check(request, cfg)
+    assert report.ok, report.summary()
+    assert report.dataset.crs == "EPSG:4326"
+    result = cubesip.run(request, cfg)
+    assert result.path.name.startswith("url_floodMapGL-rp100y_")
+    assert float(result.dataset["band_1"].max()) > 0  # some flood depth in metres
+    assert cubesip.run({**request, "geohash": "u173z"}, cfg).from_cache
+
+
+def test_url_storm_wind_speed(config, tmp_path: Path) -> None:
+    """STORM 100-year cyclone wind speed, western Pacific, from an extensionless zip URL."""
+    cfg = _isolated(config, tmp_path)
+    request = {
+        "driver": "url",
+        "dataset": f"{STORM_WIND_PRESENT}!STORM_FIXED_RETURN_PERIODS_WP_100_YR_RP.tif",
+        "variables": ["band_1"],
+        "geohash": "wdw5",  # Manila
+        "time": None,
+        "target_dir": str(tmp_path),
+    }
+    result = cubesip.run(request, cfg)
+    assert 20 < float(result.dataset["band_1"].max()) < 100  # m/s

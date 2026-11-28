@@ -11,6 +11,7 @@ from. To add a new source, see [writing-a-driver.md](writing-a-driver.md).
 | `edh` | Earth Data Hub dataset path, e.g. `era5/era5-single-levels-atmosphere-v0` | Earth Data Hub Zarr, streamed with xarray | `earthdatahub` |
 | `tessera` | TESSERA store version, e.g. `v1.1` (or a store URL) | [TESSERA](https://github.com/ucam-eo/tessera) embeddings, read with [geotessera](https://github.com/ucam-eo/geotessera)'s Zarr API from the public Source Cooperative stores | none |
 | `beeldmateriaal` | `ortho_hr` (8 cm, spring) or `ortho_lr` (25 cm, summer) | [Beeldmateriaal Nederland](https://www.beeldmateriaal.nl/dataroom) aerial orthophotos of the Netherlands (RGB and near-infrared), the open-data GeoTIFF tiles behind PDOK Luchtfoto RGB / CIR, read window by window over HTTP | none |
+| `url` | `http(s)` URL of a GeoTIFF/COG, NetCDF or Zarr store, or `<zip URL>!<GeoTIFF inside the zip>` | one file on a web server, read with HTTP range requests (GDAL `/vsicurl/` and `/vsizip/`, netCDF-C byte-range mode, Zarr over HTTP); meant for global hazard and exposure maps such as those in the [Climate Risk STAC](https://climate-risk-data.github.io/climate-risk-stac/) | none |
 | `local` | path to a Zarr store, NetCDF or GeoTIFF | the local file system, read with xarray | none |
 
 ## openEO-based drivers: `openeo`, `cdse_federation`, `stac`
@@ -194,3 +195,75 @@ ndvi = (ds["nir"].astype("float32") - ds["red"]) / (ds["nir"].astype("float32") 
   most recently modified file is used. The URLs of the tiles read are stored in the NetCDF
   attribute `source_tiles`.
 
+## Files on a web server: `url`
+
+The `url` driver reads one file that a server publishes as is, without downloading it whole.
+It is the `local` driver for files on the web: a GeoTIFF becomes one variable per band, a
+NetCDF or Zarr store keeps its variable names, and only the pixels of the geohash cell are
+transferred. No account is needed; only public files can be read.
+
+It was written for the global hazard and exposure maps that the [Climate Risk
+STAC](https://climate-risk-data.github.io/climate-risk-stac/) lists. That catalogue
+describes datasets but does not serve them: it has no search API, and its items point to
+whole-world files, zip archives or landing pages. So the `url` driver reads the file an item
+points to, not the catalogue itself. The catalogue is still the place to find the file and
+read the dataset's licence.
+
+| `dataset` written as | Read with | Example |
+|---|---|---|
+| `https://.../map.tif` | GDAL `/vsicurl/` | a Cloud Optimized GeoTIFF |
+| `https://.../maps.zip!folder/map.tif` | GDAL `/vsizip/` over `/vsicurl/` | JRC flood depth, STORM wind speeds |
+| `https://.../data.nc` | netCDF-C byte-range mode (`#mode=bytes`) | SPEIbase |
+| `https://.../store.zarr` | xarray + zarr over HTTP | any public Zarr |
+
+Two global hazard maps, both checked live on 2026-11-28:
+
+```python
+# JRC river flood depth (m) for the 100-year return period, 30 arc seconds (~1 km)
+jrc = cubesip.run(
+    {
+        "driver": "url",
+        "dataset": "https://cidportal.jrc.ec.europa.eu/ftp/jrc-opendata/FLOODS/GlobalMaps/"
+        "floodMapGL_rp100y.zip!floodMapGL_rp100y.tif",
+        "variables": ["band_1"],
+        "geohash": "u173",  # around Amsterdam
+        "time": None,
+    }
+)
+
+# STORM 100-year tropical cyclone wind speed (m/s), western Pacific, present climate, 0.1 deg.
+# The archive URL on 4TU.ResearchData has no extension; the "!" still names the member.
+storm = cubesip.run(
+    {
+        "driver": "url",
+        "dataset": "https://data.4tu.nl/file/0ea98bdd-5772-4da8-ae97-99735e891aff/"
+        "0b98c6f5-c7af-45bb-bb6e-dac53e1b8d55!STORM_FIXED_RETURN_PERIODS_WP_100_YR_RP.tif",
+        "variables": ["band_1"],
+        "geohash": "wdw5",  # Manila
+        "time": None,
+    }
+)
+```
+
+- `dataset`: the format comes from the URL's extension. A URL without one (data
+  repositories often have none) is recognised from its first bytes. A zip archive needs the
+  member named after `!`, and only GeoTIFF members can be read. To list the members of an
+  archive: `zipfile.ZipFile(fsspec.open(url).open()).namelist()` reads only its directory.
+- `variables`: `band_1`, `band_2`... for GeoTIFFs whose bands have no descriptions (most
+  hazard maps), otherwise the descriptions. NetCDF and Zarr use their own variable names.
+- `time`: `null` for layers without a time dimension, which most hazard maps are. Each return
+  period or scenario is usually a separate file, so it is a separate `dataset` and its own
+  manifest row.
+- No-data pixels become NaN, as with `local` GeoTIFFs. A cell where the map has no value
+  (e.g. no flood) is written as all NaN, not refused.
+- The server must answer HTTP range requests (most do). A member of a compressed zip is
+  decompressed from its start, so its first read takes a few seconds for a large map (about
+  3 s for the 37 MB JRC member).
+- Coarse maps and small cells: every pixel that touches the cell is kept, so a level-7
+  geohash still gets the one ~1 km pixel that contains it, and child cells are cut from the
+  cached file.
+- What it does not cover: datasets that are only on the Copernicus Climate Data Store (most
+  of the catalogue's derived climate indices) need a queued CDS API request and are not
+  supported; vector, event and table data (CEMS rapid mapping, storm tracks) do not fit
+  cubesip's gridded model; files behind a login (NASA Earthdata, for GEHE) cannot be read
+  and fail as not found or refused.

@@ -8,6 +8,7 @@ stac             STAC collection URL         load_stac on the back-end named by 
 edh              Earth Data Hub dataset      Earth Data Hub Zarr, read with xarray
 tessera          TESSERA store version       TESSERA embeddings Zarr, read with geotessera
 beeldmateriaal   ortho_hr / ortho_lr         Dutch 8 / 25 cm aerial orthophoto GeoTIFF tiles
+url              GeoTIFF/NetCDF/Zarr URL     one file on a web server, read over HTTP ranges
 local            Zarr/NetCDF/GeoTIFF path    the local file system, read with xarray
 """
 
@@ -32,6 +33,7 @@ _REGISTRY = {
     "edh": ("cubesip.drivers.edh", "EarthDataHubDriver"),
     "tessera": ("cubesip.drivers.tessera", "TesseraDriver"),
     "beeldmateriaal": ("cubesip.drivers.beeldmateriaal", "BeeldmateriaalDriver"),
+    "url": ("cubesip.drivers.url", "UrlDriver"),
     "local": ("cubesip.drivers.local", "LocalDriver"),
 }
 

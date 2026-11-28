@@ -39,7 +39,7 @@ class LocalDriver(XarraySourceDriver):
         return xr.open_dataset(path, chunks={}, decode_coords="all")
 
 
-def open_geotiff(path: Path) -> xr.Dataset:
+def open_geotiff(path: Path | str) -> xr.Dataset:
     """Open a GeoTIFF, possibly with several bands, as a Dataset with one variable per band. Bands
     are named from their descriptions when these are present and all different, otherwise band_1,
     band_2...

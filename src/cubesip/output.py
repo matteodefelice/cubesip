@@ -17,10 +17,11 @@ _KEEP_ENCODING = ("grid_mapping", "coordinates")
 
 
 def dataset_slug(dataset_key: str) -> str:
-    """Make a short label for a dataset that is safe in a file name: the last part of its path,
-    without extension, with unusual characters replaced by '-'.
+    """Make a short label for a dataset that is safe in a file name: the last part of its path
+    (of the archive member, for ``<zip URL>!<member>``), without extension, with unusual
+    characters replaced by '-'.
     """
-    segment = [part for part in re.split(r"[/\\]", dataset_key) if part][-1:] or ["dataset"]
+    segment = [part for part in re.split(r"[/\\!]", dataset_key) if part][-1:] or ["dataset"]
     stem = re.sub(r"\.(zarr|nc|nc4|netcdf|tif|tiff)$", "", segment[0], flags=re.IGNORECASE)
     slug = re.sub(r"[^A-Za-z0-9-]+", "-", stem).strip("-")
     return slug[:40] or "dataset"

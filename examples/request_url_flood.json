@@ -1,0 +1,8 @@
+{
+  "driver": "url",
+  "dataset": "https://cidportal.jrc.ec.europa.eu/ftp/jrc-opendata/FLOODS/GlobalMaps/floodMapGL_rp100y.zip!floodMapGL_rp100y.tif",
+  "variables": ["band_1"],
+  "geohash": "u173",
+  "time": null,
+  "target_dir": "./data"
+}

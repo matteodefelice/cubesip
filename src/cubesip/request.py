@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from cubesip import geohash as gh
 
 DriverName = Literal[
-    "openeo", "cdse_federation", "stac", "edh", "tessera", "beeldmateriaal", "local"
+    "openeo", "cdse_federation", "stac", "edh", "tessera", "beeldmateriaal", "url", "local"
 ]
 
 
@@ -59,6 +59,7 @@ class Request(BaseModel):
         "CDSE + Terrascope), 'stac' (any STAC collection, loaded with openEO load_stac), "
         "'edh' (Earth Data Hub Zarr), 'tessera' (TESSERA embeddings via geotessera), "
         "'beeldmateriaal' (Dutch 8 or 25 cm aerial orthophotos, RGB + near-infrared), "
+        "'url' (one GeoTIFF/NetCDF/Zarr on a web server, e.g. a global hazard map), "
         "'local' (Zarr/NetCDF/GeoTIFF on disk)."
     )
     dataset: str = Field(
@@ -68,6 +69,7 @@ class Request(BaseModel):
         "edh: dataset path (e.g. era5/era5-single-levels-atmosphere-v0) or full URL; "
         "tessera: store version (e.g. v1.1) or store URL; "
         "beeldmateriaal: ortho_hr (8 cm, spring) or ortho_lr (25 cm, summer); "
+        "url: http(s) URL of the file or store, or <zip URL>!<GeoTIFF inside the zip>; "
         "local: path to the store/file.",
     )
     variables: list[str] = Field(
